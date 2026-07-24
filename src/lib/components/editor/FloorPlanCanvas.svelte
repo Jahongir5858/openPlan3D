@@ -841,7 +841,10 @@
 
   function updateDetectedRooms() {
     if (!currentFloor) return;
-    const hash = JSON.stringify(currentFloor.walls.map(w => [w.start, w.end]));
+    // Keyed on the floor too: two storeys can share identical wall geometry
+    // (a duplicated or stacked floor), and without the id the cache would
+    // skip re-detection and leave the previous floor's rooms on screen.
+    const hash = currentFloor.id + JSON.stringify(currentFloor.walls.map(w => [w.start, w.end]));
     if (hash === lastWallHash) return;
     lastWallHash = hash;
     const newRooms = detectRooms(currentFloor.walls);

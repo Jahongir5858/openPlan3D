@@ -7,7 +7,8 @@
  */
 
 import type { Floor, Wall, Door, Window, FurnitureItem, Room, Point, Project } from '$lib/models/types';
-import { createDefaultProject } from '$lib/stores/project';
+import { createDefaultProject, createDefaultFloor } from '$lib/stores/project';
+import { detectRooms, getRoomPolygon } from '$lib/utils/roomDetection';
 
 function uid(): string {
   return Math.random().toString(36).slice(2, 10);
@@ -34,6 +35,18 @@ interface RPWall {
   transform: number[];
   category: any;
   parentIdentifier?: string | null;
+  /** Storey index; absent means ground floor. */
+  story?: number;
+}
+
+interface RPStory {
+  index: number;
+  name: string;
+}
+
+/** Storey an element belongs to; anything untagged is the ground floor. */
+function storyOf(item: { story?: number }): number {
+  return typeof item.story === 'number' ? item.story : 0;
 }
 
 interface RPDoorWindow {
@@ -42,6 +55,7 @@ interface RPDoorWindow {
   transform: number[];
   category: any;
   parentIdentifier: string | null;
+  story?: number;
 }
 
 interface RPObject {
@@ -50,12 +64,37 @@ interface RPObject {
   transform: number[];
   category: any;
   attributes?: any;
+  story?: number;
 }
 
 interface RPSection {
   center: number[];
   label: string;
   story: number;
+  /** Optional human-readable name from the iOS app, overriding the label map. */
+  displayName?: string;
+  /** Optional "#RRGGBB" room colour from the iOS app. */
+  color?: string;
+}
+
+/** Ray-casting point-in-polygon test. */
+function pointInPolygon(point: Point, polygon: Point[]): boolean {
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const a = polygon[i];
+    const b = polygon[j];
+    const straddles = a.y > point.y !== b.y > point.y;
+    if (straddles && point.x < ((b.x - a.x) * (point.y - a.y)) / (b.y - a.y) + a.x) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
+function polygonCentroid(polygon: Point[]): Point {
+  let x = 0, y = 0;
+  for (const p of polygon) { x += p.x; y += p.y; }
+  return { x: x / polygon.length, y: y / polygon.length };
 }
 
 function getCategoryKey(cat: any): string {
@@ -200,7 +239,7 @@ function angleDiff(a: number, b: number): number {
 /** Orthogonal enforcement version (shown in import dialog) */
 export const ORTHO_VERSION = 'v5';
 
-function enforceOrthogonal(walls: Wall[], mergeDistance = 15, furniture?: FurnitureItem[]): void {
+function enforceOrthogonal(walls: Wall[], mergeDistance = 15, furniture?: FurnitureItem[], extraPoints?: Point[]): void {
   if (walls.length === 0) return;
 
   // ── Step 1: Global rotation to remove dominant angle ──
@@ -251,6 +290,11 @@ function enforceOrthogonal(walls: Wall[], mergeDistance = 15, furniture?: Furnit
       rotatePoint(f.position);
       f.rotation = (f.rotation ?? 0) + (rotationAngle * 180) / Math.PI;
     }
+  }
+  // Room-label anchors must ride the same rotation as the walls, or they end
+  // up outside the room they name once the layout is squared up.
+  if (extraPoints) {
+    for (const p of extraPoints) rotatePoint(p);
   }
 
   // ── Step 2: Classify each wall as H or V ──
@@ -665,23 +709,62 @@ export function importRoomPlan(jsonData: any, options: RoomPlanImportOptions = {
     });
   }
 
+  // Section anchors travel with the walls through post-processing so a label
+  // still lands inside its room after the layout is straightened.
+  const sectionAnchors: Point[] = rpSections.map(rs =>
+    toOurPoint(rs.center?.[0] ?? 0, rs.center?.[2] ?? 0)
+  );
+
   // Post-process walls (after doors/windows/furniture so projections use original positions)
   const md = options.mergeDistance ?? 15;
   if (options.orthogonal) {
-    enforceOrthogonal(walls, md, furniture);
+    enforceOrthogonal(walls, md, furniture, sectionAnchors);
   } else if (options.straighten !== false) {
     straightenWalls(walls, options.angleTolerance ?? 5, md);
   }
 
-  // Process sections (rooms)
-  for (const rs of rpSections) {
-    rooms.push({
-      id: uid(),
-      name: mapSectionLabel(rs.label),
-      walls: [], // wall association would need polygon analysis
-      floorTexture: 'hardwood',
-      area: 0,
-    });
+  // Process sections (rooms).
+  //
+  // A section is a label at a point; the room it names is whichever detected
+  // wall cycle encloses that point. Without this the imported rooms carry no
+  // wall ids, and the canvas — which matches saved rooms to detected ones by
+  // wall set — silently drops every name the capture sent.
+  if (rpSections.length > 0) {
+    const detected = detectRooms(walls);
+    const polygons = detected.map(room => getRoomPolygon(room, walls));
+    const claimed = new Set<number>();
+
+    for (let si = 0; si < rpSections.length; si++) {
+      const rs = rpSections[si];
+      const anchor = sectionAnchors[si];
+
+      let matchIndex = polygons.findIndex(
+        (poly, di) => !claimed.has(di) && poly.length >= 3 && pointInPolygon(anchor, poly)
+      );
+      // Nothing encloses it (open-plan capture, or a label nudged outside):
+      // fall back to the nearest unclaimed room so the name isn't lost.
+      if (matchIndex < 0) {
+        let bestDistance = Infinity;
+        for (let di = 0; di < detected.length; di++) {
+          if (claimed.has(di) || polygons[di].length < 3) continue;
+          const c = polygonCentroid(polygons[di]);
+          const d = Math.hypot(c.x - anchor.x, c.y - anchor.y);
+          if (d < bestDistance) { bestDistance = d; matchIndex = di; }
+        }
+      }
+
+      const source = matchIndex >= 0 ? detected[matchIndex] : undefined;
+      if (matchIndex >= 0) claimed.add(matchIndex);
+
+      rooms.push({
+        id: source?.id ?? uid(),
+        name: rs.displayName || mapSectionLabel(rs.label),
+        walls: source?.walls ?? [],
+        floorTexture: 'hardwood',
+        area: source?.area ?? 0,
+        ...(rs.color ? { color: rs.color } : {}),
+      });
+    }
   }
 
   return {
@@ -743,19 +826,89 @@ export const DEFAULT_ROOMPLAN_OPTIONS: RoomPlanImportOptions = {
  * placed on the first floor). Shared by the file-import dialog and the iOS capture
  * handoff (`/editor?import=CODE`). Caller is responsible for loading/saving it.
  */
+/** Name for a storey, preferring one the capture supplied. */
+function storyName(index: number, stories: RPStory[]): string {
+  const named = stories.find(s => s.index === index);
+  if (named?.name) return named.name;
+  if (index === 0) return 'Ground Floor';
+  if (index < 0) return index === -1 ? 'Basement' : `Basement ${-index}`;
+  return `Floor ${index}`;
+}
+
+/**
+ * Import every storey in a capture. Elements carry a `story` index (absent =
+ * ground floor); each distinct storey becomes its own Floor, so a multi-level
+ * capture no longer collapses into one.
+ */
+export function importRoomPlanFloors(
+  jsonData: any,
+  options: RoomPlanImportOptions = DEFAULT_ROOMPLAN_OPTIONS
+): Floor[] {
+  const stories: RPStory[] = jsonData.stories ?? [];
+  const tagged: { story?: number }[] = [
+    ...(jsonData.walls ?? []),
+    ...(jsonData.doors ?? []),
+    ...(jsonData.windows ?? []),
+    ...(jsonData.objects ?? []),
+    ...(jsonData.sections ?? []),
+  ];
+
+  const indices = new Set<number>(tagged.map(storyOf));
+  for (const s of stories) indices.add(s.index);
+  if (indices.size === 0) indices.add(0);
+  const sorted = [...indices].sort((a, b) => a - b);
+
+  return sorted
+    .map(index => {
+      // Each storey is imported on its own so wall straightening, room
+      // detection and corner merging never mix geometry across levels.
+      const subset = sorted.length === 1 ? jsonData : {
+        ...jsonData,
+        walls: (jsonData.walls ?? []).filter((w: any) => storyOf(w) === index),
+        doors: (jsonData.doors ?? []).filter((d: any) => storyOf(d) === index),
+        windows: (jsonData.windows ?? []).filter((w: any) => storyOf(w) === index),
+        objects: (jsonData.objects ?? []).filter((o: any) => storyOf(o) === index),
+        sections: (jsonData.sections ?? []).filter((s: any) => storyOf(s) === index),
+      };
+      const floor = importRoomPlan(subset, options);
+      floor.level = index;
+      floor.name = storyName(index, stories);
+      return floor;
+    })
+    // A storey listed in `stories` but with nothing on it isn't worth a tab.
+    .filter(floor => floor.walls.length > 0 || floor.level === 0);
+}
+
+/**
+ * Build a brand-new project from RoomPlan JSON data. Shared by the
+ * file-import dialog and the iOS capture handoff (`/editor?import=CODE`).
+ * Caller is responsible for loading/saving it.
+ */
 export function createProjectFromRoomPlan(
   jsonData: any,
   name: string,
   options: RoomPlanImportOptions = DEFAULT_ROOMPLAN_OPTIONS
 ): Project {
-  const floor = importRoomPlan(jsonData, options);
+  const floors = importRoomPlanFloors(jsonData, options);
   const project = createDefaultProject(name || 'RoomPlan Import');
-  const activeFloor = project.floors[0];
-  activeFloor.walls = floor.walls;
-  activeFloor.doors = floor.doors;
-  activeFloor.windows = floor.windows;
-  activeFloor.furniture = floor.furniture;
-  if (floor.stairs) activeFloor.stairs = floor.stairs;
-  if (floor.columns) activeFloor.columns = floor.columns;
+
+  // Build each storey from a fresh default floor. Spreading one template
+  // would alias its guides/annotations/groups arrays across every floor.
+  project.floors = floors.map(floor => {
+    const target = createDefaultFloor(floor.level);
+    target.name = floor.name;
+    target.walls = floor.walls;
+    target.rooms = floor.rooms;
+    target.doors = floor.doors;
+    target.windows = floor.windows;
+    target.furniture = floor.furniture;
+    target.stairs = floor.stairs ?? [];
+    target.columns = floor.columns ?? [];
+    return target;
+  });
+
+  // Open on the ground floor when there is one.
+  const ground = project.floors.find(f => f.level === 0) ?? project.floors[0];
+  project.activeFloorId = ground.id;
   return project;
 }
