@@ -4,6 +4,8 @@
 
 Design floor plans in an intuitive 2D editor, then instantly preview them in a fully navigable 3D view — all in your browser. No account required, no server dependency; your projects stay on your device.
 
+**🌐 Try it live: [app.openplan3d.com](https://app.openplan3d.com/)**
+
 <p align="center">
   <img src="plan1_2d.jpg" alt="2D Floor Plan View" width="48%">
   <img src="plan1_3d.jpg" alt="3D Floor Plan View" width="48%">
@@ -58,7 +60,24 @@ Design floor plans in an intuitive 2D editor, then instantly preview them in a f
 
 ---
 
+## 📱 Companion iOS App
+
+Scan a room with your iPhone and get an editable floor plan in seconds. The OpenPlan3D iOS app uses LiDAR (with an AR fallback for non-LiDAR devices) to build walls, doors, and windows as you walk, calculates room areas automatically, and shows the result in 2D and 3D — then hands the plan off to the web editor with one tap (see [iOS capture handoff](#-ios-capture-handoff)).
+
+<p align="center">
+  <img src="ios_home.png" alt="iOS app — scan a room, get a floor plan" width="24%">
+  <img src="ios_editor.png" alt="iOS app — edit walls, doors, and windows" width="24%">
+  <img src="ios_plan.png" alt="iOS app — room areas calculated" width="24%">
+  <img src="ios_3d.png" alt="iOS app — 3D view of the scanned space" width="24%">
+</p>
+
+---
+
 ## 🚀 Getting Started
+
+The easiest way to try openplan3d is the hosted version at **[app.openplan3d.com](https://app.openplan3d.com/)** — no install needed.
+
+To run it locally:
 
 ```bash
 # Clone the repository
