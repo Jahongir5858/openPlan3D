@@ -81,7 +81,7 @@ To run it locally:
 
 ```bash
 # Clone the repository
-git clone https://github.com/theLodgeBots/open3dFloorplan.git
+git clone https://github.com/laanlabs/open3dFloorplan.git
 cd open3dFloorplan
 
 # Install dependencies
