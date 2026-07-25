@@ -81,8 +81,8 @@ To run it locally:
 
 ```bash
 # Clone the repository
-git clone https://github.com/laanlabs/open3dFloorplan.git
-cd open3dFloorplan
+git clone https://github.com/laanlabs/openPlan3D.git
+cd openPlan3D
 
 # Install dependencies
 npm install
