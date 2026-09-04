@@ -20,7 +20,9 @@ jobs:
       - name: Install dependencies
         run: |
           npm ci
-          npm install --no-save --package-lock=false @sveltejs/adapter-static
+          npm install --no-save --package-lock=false @sveltejs/adapter-static tsx
+      - name: Run room geometry regression tests
+        run: npx tsx test-inset.ts
       - name: Configure static build
         run: |
           cat > svelte.config.js <<'EOF'
