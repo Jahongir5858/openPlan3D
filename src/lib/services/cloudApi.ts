@@ -1,13 +1,7 @@
-const TOKEN_KEY = 'openplan3d_cloud_token';
 const USER_KEY = 'openplan3d_cloud_user';
 
 export type CloudUser = { username: string; userId?: number; expiresAt?: string };
 export type CloudProjectSummary = { id: string; name: string; updatedAt: string };
-
-function token() {
-  if (typeof localStorage === 'undefined') return '';
-  return localStorage.getItem(TOKEN_KEY) ?? '';
-}
 
 export function currentCloudUser(): CloudUser | null {
   if (typeof localStorage === 'undefined') return null;
@@ -19,14 +13,13 @@ export function currentCloudUser(): CloudUser | null {
   }
 }
 
-function saveSession(nextToken: string, user: CloudUser) {
-  localStorage.setItem(TOKEN_KEY, nextToken);
+function saveUser(user: CloudUser) {
+  if (typeof localStorage === 'undefined') return;
   localStorage.setItem(USER_KEY, JSON.stringify(user));
 }
 
 export function clearCloudSession() {
   if (typeof localStorage === 'undefined') return;
-  localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(USER_KEY);
 }
 
@@ -34,10 +27,12 @@ async function request<T>(path: string, init: RequestInit = {}, allow401 = false
   const headers = new Headers(init.headers);
   headers.set('accept', 'application/json');
   if (init.body && !headers.has('content-type')) headers.set('content-type', 'application/json');
-  const authToken = token();
-  if (authToken) headers.set('authorization', `Bearer ${authToken}`);
 
-  const response = await fetch(path, { ...init, headers });
+  const response = await fetch(path, {
+    ...init,
+    headers,
+    credentials: 'same-origin',
+  });
   let data: any = null;
   try { data = await response.json(); } catch {}
   if (!response.ok) {
@@ -59,20 +54,20 @@ export async function setupAdmin(setupKey: string, username: string, password: s
 }
 
 export async function loginCloud(username: string, password: string) {
-  const data = await request<{ token: string; username: string; expiresAt: string }>('/api/auth/login', {
+  const data = await request<{ username: string; expiresAt: string }>('/api/auth/login', {
     method: 'POST',
     body: JSON.stringify({ username, password }),
   }, true);
-  saveSession(data.token, { username: data.username, expiresAt: data.expiresAt });
-  return currentCloudUser()!;
+  const user = { username: data.username, expiresAt: data.expiresAt };
+  saveUser(user);
+  return user;
 }
 
 export async function validateCloudSession(): Promise<CloudUser | null> {
-  if (!token()) return null;
   try {
     const data = await request<{ authenticated: true; username: string; userId: number; expiresAt: string }>('/api/auth/me');
     const user = { username: data.username, userId: data.userId, expiresAt: data.expiresAt };
-    localStorage.setItem(USER_KEY, JSON.stringify(user));
+    saveUser(user);
     return user;
   } catch {
     clearCloudSession();
