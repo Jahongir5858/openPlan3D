@@ -1,0 +1,32 @@
+name: Check OpenPlan3D build
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install dependencies
+        run: |
+          npm ci
+          npm install --no-save --package-lock=false @sveltejs/adapter-static
+      - name: Configure static build
+        run: |
+          cat > svelte.config.js <<'EOF'
+          import adapter from '@sveltejs/adapter-static';
+          const config = { kit: { adapter: adapter({ fallback: 'index.html' }) } };
+          export default config;
+          EOF
+      - name: Build
+        run: npm run build
