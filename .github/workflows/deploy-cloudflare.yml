@@ -1,0 +1,141 @@
+name: Deploy OpenPlan3D to Cloudflare
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloudflare-production
+  cancel-in-progress: true
+
+env:
+  CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+  CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+  OPENPLAN3D_SETUP_KEY: ${{ secrets.OPENPLAN3D_SETUP_KEY }}
+  WORKER_NAME: openplan3d-uz-jahongir5858
+  D1_NAME: openplan3d-db
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check Cloudflare secrets
+        id: config
+        shell: bash
+        run: |
+          if [ -n "$CLOUDFLARE_API_TOKEN" ] && [ -n "$CLOUDFLARE_ACCOUNT_ID" ] && [ -n "$OPENPLAN3D_SETUP_KEY" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "Cloudflare secrets are not configured yet. Deployment skipped safely."
+          fi
+
+      - name: Checkout
+        if: steps.config.outputs.configured == 'true'
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        if: steps.config.outputs.configured == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install app dependencies
+        if: steps.config.outputs.configured == 'true'
+        run: |
+          npm ci
+          npm install --no-save --package-lock=false @sveltejs/adapter-static
+
+      - name: Configure static SvelteKit build
+        if: steps.config.outputs.configured == 'true'
+        run: |
+          cat > svelte.config.js <<'EOF'
+          import adapter from '@sveltejs/adapter-static';
+
+          /** @type {import('@sveltejs/kit').Config} */
+          const config = {
+            kit: {
+              adapter: adapter({ fallback: 'index.html' })
+            }
+          };
+
+          export default config;
+          EOF
+
+      - name: Build OpenPlan3D
+        if: steps.config.outputs.configured == 'true'
+        run: npm run build
+
+      - name: Install Wrangler
+        if: steps.config.outputs.configured == 'true'
+        run: npm install --no-save --package-lock=false wrangler@latest
+
+      - name: Find or create D1 database
+        if: steps.config.outputs.configured == 'true'
+        id: d1
+        shell: bash
+        run: |
+          get_db_id() {
+            npx wrangler d1 list --json | node -e '
+              let s=""; process.stdin.on("data",d=>s+=d); process.stdin.on("end",()=>{
+                const rows=JSON.parse(s); const hit=rows.find(x=>x.name===process.env.D1_NAME);
+                if(hit) process.stdout.write(hit.uuid || hit.id || "");
+              });'
+          }
+
+          DB_ID="$(get_db_id)"
+          if [ -z "$DB_ID" ]; then
+            echo "Creating D1 database: $D1_NAME"
+            npx wrangler d1 create "$D1_NAME"
+            DB_ID="$(get_db_id)"
+          fi
+
+          if [ -z "$DB_ID" ]; then
+            echo "Unable to determine D1 database id" >&2
+            exit 1
+          fi
+          echo "database_id=$DB_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Generate Wrangler config
+        if: steps.config.outputs.configured == 'true'
+        shell: bash
+        env:
+          D1_DATABASE_ID: ${{ steps.d1.outputs.database_id }}
+        run: |
+          cat > wrangler.generated.jsonc <<EOF
+          {
+            "name": "$WORKER_NAME",
+            "main": "cloudflare/worker/src/index.ts",
+            "compatibility_date": "2026-09-04",
+            "assets": {
+              "directory": "./build",
+              "binding": "ASSETS",
+              "not_found_handling": "single-page-application"
+            },
+            "d1_databases": [
+              {
+                "binding": "DB",
+                "database_name": "$D1_NAME",
+                "database_id": "$D1_DATABASE_ID"
+              }
+            ]
+          }
+          EOF
+
+      - name: Apply D1 schema
+        if: steps.config.outputs.configured == 'true'
+        run: npx wrangler d1 execute "$D1_NAME" --remote --file=cloudflare/worker/schema.sql --yes --config=wrangler.generated.jsonc
+
+      - name: Deploy app and API
+        if: steps.config.outputs.configured == 'true'
+        run: npx wrangler deploy --config=wrangler.generated.jsonc
+
+      - name: Set one-time setup secret
+        if: steps.config.outputs.configured == 'true'
+        shell: bash
+        run: printf '%s' "$OPENPLAN3D_SETUP_KEY" | npx wrangler secret put SETUP_KEY --config=wrangler.generated.jsonc
