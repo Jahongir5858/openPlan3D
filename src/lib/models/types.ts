@@ -25,7 +25,10 @@ export interface Room {
   name: string;
   walls: string[];
   floorTexture: string;
+  /** Clear (net) floor area in m² — centerline polygon inset by half of each surrounding wall */
   area: number;
+  /** Gross (axis-to-axis) area in m², measured on the wall centerlines */
+  grossArea?: number;
   color?: string;
   roomType?: RoomCategory;
   /** Custom label position offset from centroid (in world units) */

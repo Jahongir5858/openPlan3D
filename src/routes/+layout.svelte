@@ -1,16 +1,15 @@
 <script>
   import '../app.css';
-  import { browser } from '$app/environment';
   import { onMount } from 'svelte';
   import { themePreference } from '$lib/stores/theme';
   import { installUzbekUi } from '$lib/i18n/uz';
+  import AuthGate from '$lib/components/AuthGate.svelte';
 
-  onMount(() => {
-    import('$lib/firebase');
-    return installUzbekUi();
-  });
+  onMount(() => installUzbekUi());
 
   let { children } = $props();
 </script>
 
-{@render children()}
+<AuthGate>
+  {@render children()}
+</AuthGate>

@@ -224,12 +224,20 @@ export function detectRooms(walls: Wall[]): Room[] {
       if (dup) continue;
 
       roomCount++;
+      // `area` is the clear (net) floor area — what the room actually offers.
+      // The centerline figure is kept alongside it as `grossArea` for anyone
+      // who needs axis-to-axis numbers (structural take-offs, gross floor area).
+      const roomWalls = walls.filter(w => uniqueWalls.includes(w.id));
+      const clearPoly = insetPolygonByWalls(poly, roomWalls);
+      const clearArea = clearPoly.length >= 3 ? Math.abs(shoelace(clearPoly)) : area;
+
       rooms.push({
         id: `room-${roomCount}-${Date.now()}`,
         name: `Room ${roomCount}`,
         walls: uniqueWalls,
         floorTexture: 'hardwood',
-        area: Math.round(area / 10000 * 100) / 100, // cm² to m²
+        area: Math.round(clearArea / 10000 * 100) / 100,   // cm² to m²
+        grossArea: Math.round(area / 10000 * 100) / 100,
       });
     }
   }
@@ -244,6 +252,148 @@ function shoelace(pts: Point[]): number {
     sum += pts[i].x * pts[j].y - pts[j].x * pts[i].y;
   }
   return sum / 2;
+}
+
+// ── Clear (net) room geometry ────────────────────────────────────────
+//
+// detectRooms() traces the wall CENTERLINES, so the polygon it produces runs
+// through the middle of every surrounding wall. Its area is therefore a gross
+// (axis-to-axis) figure that includes half of each wall's footprint — typically
+// 7–13% more than the floor a person can actually stand on, and the error grows
+// as rooms get smaller relative to wall thickness.
+//
+// The helpers below offset that centerline polygon inward by each bordering
+// wall's half-thickness to produce the clear (net) room outline.
+
+/** Perpendicular distance from p to segment ab. */
+function distToSegment(p: Point, a: Point, b: Point): number {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq < 1e-9) return Math.hypot(p.x - a.x, p.y - a.y);
+  let t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / lenSq;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+}
+
+/**
+ * How far a polygon edge should move inward: half the thickness of whichever
+ * candidate wall the edge actually lies on. Matching is done on the edge
+ * midpoint, so it works regardless of how the polygon was chained together and
+ * regardless of whether the edge covers the whole wall or a T-junction
+ * sub-segment. Returns 0 when no wall matches, which leaves that edge in place.
+ */
+function insetForEdge(a: Point, b: Point, candidates: Wall[]): number {
+  const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+  let bestDist = Infinity;
+  let bestThickness = 0;
+  for (const w of candidates) {
+    if (w.curvePoint) continue; // curved walls aren't straight segments
+    const d = distToSegment(mid, w.start, w.end);
+    if (d < bestDist) {
+      bestDist = d;
+      bestThickness = w.thickness;
+    }
+  }
+  if (bestDist > EPSILON || bestThickness <= 0) return 0;
+  return bestThickness / 2;
+}
+
+/** Miter joints longer than this multiple of the inset are clipped back. */
+const MITER_LIMIT = 4;
+
+/**
+ * Offset a closed polygon inward, edge by edge, by a per-edge distance taken
+ * from the wall that edge sits on. Each edge is slid along its inward normal
+ * and consecutive offset lines are intersected, so corners stay sharp (a proper
+ * miter) instead of being rounded or clipped.
+ *
+ * Returns [] when the inset collapses the polygon — a "room" narrower than the
+ * walls around it has no clear area to report, and callers fall back to the
+ * centerline figure rather than showing a negative or inside-out result.
+ */
+export function insetPolygonByWalls(poly: Point[], candidates: Wall[]): Point[] {
+  const n = poly.length;
+  if (n < 3) return [];
+
+  // Normalise winding so that the left-hand normal (-uy, ux) points inward.
+  const area0 = shoelace(poly);
+  if (Math.abs(area0) < 1e-6) return [];
+  const pts = area0 < 0 ? [...poly].reverse() : poly.slice();
+
+  // Build the inward-offset support line for every edge.
+  interface OffsetLine { px: number; py: number; ux: number; uy: number; d: number }
+  const lines: (OffsetLine | null)[] = [];
+  for (let i = 0; i < n; i++) {
+    const a = pts[i];
+    const b = pts[(i + 1) % n];
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const len = Math.hypot(dx, dy);
+    if (len < 1e-6) { lines.push(null); continue; }
+    const ux = dx / len;
+    const uy = dy / len;
+    const d = insetForEdge(a, b, candidates);
+    lines.push({ px: a.x - uy * d, py: a.y + ux * d, ux, uy, d });
+  }
+
+  // Each output vertex is where the previous edge's offset line meets this one's.
+  const out: Point[] = [];
+  for (let i = 0; i < n; i++) {
+    const cur = lines[i];
+    if (!cur) continue;
+    let prev: OffsetLine | null = null;
+    for (let k = 1; k <= n; k++) {
+      const cand = lines[(i - k + n * 2) % n];
+      if (cand) { prev = cand; break; }
+    }
+    if (!prev) return [];
+
+    const cross = prev.ux * cur.uy - prev.uy * cur.ux;
+    if (Math.abs(cross) < 1e-9) {
+      // Collinear or anti-parallel edges never intersect — keep the offset point.
+      out.push({ x: cur.px, y: cur.py });
+      continue;
+    }
+    const s = ((cur.px - prev.px) * cur.uy - (cur.py - prev.py) * cur.ux) / cross;
+    const vx = prev.px + prev.ux * s;
+    const vy = prev.py + prev.uy * s;
+
+    // Clip runaway miters at very shallow corners.
+    const maxOffset = Math.max(prev.d, cur.d) * MITER_LIMIT;
+    if (maxOffset > 0 && Math.hypot(vx - pts[i].x, vy - pts[i].y) > maxOffset) {
+      out.push({ x: (prev.px + cur.px) / 2, y: (prev.py + cur.py) / 2 });
+    } else {
+      out.push({ x: vx, y: vy });
+    }
+  }
+
+  if (out.length < 3) return [];
+  // The inset must shrink the polygon, not flip or grow it.
+  const area1 = shoelace(out);
+  if (area1 <= 0 || area1 > Math.abs(area0)) return [];
+  return out;
+}
+
+/**
+ * The room outline a person could actually walk on: the centerline polygon
+ * pulled in by half the thickness of every wall around it. Falls back to the
+ * centerline polygon when the inset is degenerate.
+ */
+export function getRoomClearPolygon(room: Room, walls: Wall[]): Point[] {
+  const poly = getRoomPolygon(room, walls);
+  if (poly.length < 3) return poly;
+  const ids = new Set(room.walls);
+  const candidates = walls.filter(w => ids.has(w.id));
+  const inset = insetPolygonByWalls(poly, candidates.length ? candidates : walls);
+  return inset.length >= 3 ? inset : poly;
+}
+
+/** Clear (net) floor area of a room in m². */
+export function roomClearArea(room: Room, walls: Wall[]): number {
+  const poly = getRoomClearPolygon(room, walls);
+  if (poly.length < 3) return room.area;
+  return Math.round(Math.abs(shoelace(poly)) / 10000 * 100) / 100;
 }
 
 /**

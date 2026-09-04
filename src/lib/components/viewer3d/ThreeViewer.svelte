@@ -17,6 +17,7 @@
   import { detectRooms, getRoomPolygon, roomCentroid } from '$lib/utils/roomDetection';
   import { getMaterial } from '$lib/utils/materials';
   import { getWallTextureCanvas, getFloorTextureCanvas, setTextureLoadCallback } from '$lib/utils/textureGenerator';
+  import { wallJoinExtensions } from '$lib/utils/canvasRenderer';
 
   let container: HTMLDivElement;
   let renderer: THREE.WebGLRenderer;
@@ -1265,7 +1266,9 @@
 
       const doorOpenings = floor.doors.filter((d) => d.wallId === wall.id);
       const winOpenings = floor.windows.filter((w) => w.wallId === wall.id);
-      const segments = buildWallSegments(len, h, t, doorOpenings, winOpenings);
+      // Overrun the ends so corners are solid instead of leaving a square notch
+      const ext = wallJoinExtensions(wall, floor.walls);
+      const segments = buildWallSegments(len, h, t, doorOpenings, winOpenings, ext.start, ext.end);
 
       for (const seg of segments) {
         const geo = new THREE.BoxGeometry(seg.width, seg.height, t);
@@ -1295,9 +1298,16 @@
       // Baseboard — with gaps at door openings
       const doorOpeningsForBB = floor.doors.filter((d) => d.wallId === wall.id);
       if (doorOpeningsForBB.length === 0) {
-        const bbGeo = new THREE.BoxGeometry(len, BASEBOARD_HEIGHT, t + 2);
+        // Match the wall's corner overrun so the trim doesn't stop short
+        const bbLen = len + ext.start + ext.end;
+        const bbShift = (ext.end - ext.start) / 2;
+        const bbGeo = new THREE.BoxGeometry(bbLen, BASEBOARD_HEIGHT, t + 2);
         const bbMesh = new THREE.Mesh(bbGeo, baseboardMat);
-        bbMesh.position.set(cx, BASEBOARD_HEIGHT / 2, cy);
+        bbMesh.position.set(
+          cx + bbShift * Math.cos(angle),
+          BASEBOARD_HEIGHT / 2,
+          cy + bbShift * Math.sin(angle)
+        );
         bbMesh.rotation.y = -angle;
         bbMesh.castShadow = true;
         wallGroup.add(bbMesh);
@@ -1766,7 +1776,8 @@
 
       const doorOpenings = floor.doors.filter((d) => d.wallId === wall.id);
       const winOpenings = floor.windows.filter((w) => w.wallId === wall.id);
-      const segments = buildWallSegments(len, h, t, doorOpenings, winOpenings);
+      const ext = wallJoinExtensions(wall, floor.walls);
+      const segments = buildWallSegments(len, h, t, doorOpenings, winOpenings, ext.start, ext.end);
 
       const materials = [
         defaultExteriorMat, defaultExteriorMat,
@@ -1854,9 +1865,18 @@
     offsetY: number;
   }
 
+  /**
+   * Split a wall into solid box segments, skipping door/window openings.
+   *
+   * `extStart` / `extEnd` extend the wall past its endpoints so it fills the
+   * corner where a neighbouring wall meets it (see `wallJoinExtensions`).
+   * Openings are still positioned in the wall's own 0..wallLen space; only the
+   * two boundary segments grow.
+   */
   function buildWallSegments(
     wallLen: number, wallH: number, _t: number,
-    doors: Door[], windows: Win[]
+    doors: Door[], windows: Win[],
+    extStart = 0, extEnd = 0
   ): WallSegment[] {
     type Opening = { pos: number; width: number; bottomY: number; topY: number };
     const openings: Opening[] = [];
@@ -1867,19 +1887,23 @@
       openings.push({ pos: w.position * wallLen, width: w.width, bottomY: w.sillHeight, topY: w.sillHeight + w.height });
     }
 
+    // The solid run spans [lo, hi] — wider than the wall itself at joined ends.
+    const lo = -extStart;
+    const hi = wallLen + extEnd;
+
     if (openings.length === 0) {
-      return [{ width: wallLen, height: wallH, offsetX: wallLen / 2, offsetY: 0 }];
+      return [{ width: hi - lo, height: wallH, offsetX: (lo + hi) / 2, offsetY: 0 }];
     }
 
     openings.sort((a, b) => a.pos - b.pos);
     const segs: WallSegment[] = [];
-    let cursor = 0;
+    let cursor = lo;
 
     for (const op of openings) {
       const left = op.pos - op.width / 2;
       const right = op.pos + op.width / 2;
       if (left > cursor) {
-        segs.push({ width: left - cursor, height: wallH, offsetX: cursor + (left - cursor) / 2, offsetY: 0 });
+        segs.push({ width: left - cursor, height: wallH, offsetX: (cursor + left) / 2, offsetY: 0 });
       }
       if (op.topY < wallH) {
         segs.push({ width: op.width, height: wallH - op.topY, offsetX: op.pos, offsetY: op.topY });
@@ -1890,8 +1914,8 @@
       cursor = Math.max(cursor, right);
     }
 
-    if (cursor < wallLen) {
-      segs.push({ width: wallLen - cursor, height: wallH, offsetX: cursor + (wallLen - cursor) / 2, offsetY: 0 });
+    if (cursor < hi) {
+      segs.push({ width: hi - cursor, height: wallH, offsetX: (cursor + hi) / 2, offsetY: 0 });
     }
 
     return segs;

@@ -714,8 +714,11 @@
         </select>
       </label>
       <div>
-        <span class="text-xs text-gray-500">Area</span>
+        <span class="text-xs text-gray-500">Area (clear)</span>
         <p class="text-sm text-gray-700">{formatArea(selectedRoom.area, settings.units)}</p>
+        {#if selectedRoom.grossArea && selectedRoom.grossArea > selectedRoom.area}
+          <p class="text-xs text-gray-400">{formatArea(selectedRoom.grossArea, settings.units)} to wall centrelines</p>
+        {/if}
       </div>
       <!-- Room Color -->
       <div>

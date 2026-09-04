@@ -19,7 +19,6 @@ export function initAutoSave() {
 
   let first = true;
   currentProject.subscribe((_p) => {
-    // Skip the initial subscription fire and loadProject calls
     if (first) { first = false; return; }
     if (skipNext) { skipNext = false; return; }
     if (!_p) return;
@@ -57,6 +56,7 @@ async function autoSave() {
   if (!p) return;
   saveState.set('saving');
   try {
+    // Browser backup is immediate; D1 sync is throttled to at most once/30s.
     await localStore.save(p);
     captureThumbnail(p.id);
     saveState.set('saved');
@@ -67,14 +67,14 @@ async function autoSave() {
   }
 }
 
-/** Manual save */
+/** Manual save — immediately flushes to Cloudflare D1. */
 export async function manualSave() {
   if (debounceTimer) clearTimeout(debounceTimer);
   const p = get(currentProject);
   if (!p) return;
   saveState.set('saving');
   try {
-    await localStore.save(p);
+    await localStore.syncNow(p);
     captureThumbnail(p.id);
     saveSnapshot(p, 'Manual save');
     saveState.set('saved');
