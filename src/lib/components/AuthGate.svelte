@@ -1,7 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import {
-    currentCloudUser,
     loginCloud,
     logoutCloud,
     setupAdmin,
@@ -23,8 +22,8 @@
   let error = $state('');
 
   onMount(async () => {
-    user = currentCloudUser();
-    if (user) user = await validateCloudSession();
+    // Session lives in an HttpOnly cookie, so always ask the Worker whether it is valid.
+    user = await validateCloudSession();
     if (!user) {
       try {
         const status = await setupStatus();
