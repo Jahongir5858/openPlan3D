@@ -13,6 +13,7 @@ export interface DataStore {
 }
 
 const LEGACY_KEY = 'floorplan_projects';
+const LEGACY_MIGRATION_KEY = 'floorplan_projects_legacy_migrated';
 
 function uid() {
   return auth?.currentUser?.uid ?? null;
@@ -32,9 +33,12 @@ function getAll(): Record<string, string> {
     if (Object.keys(scoped).length > 0) return scoped;
 
     // One-time compatibility migration from the original OpenPlan3D local storage.
-    const legacy = JSON.parse(localStorage.getItem(LEGACY_KEY) || '{}');
-    if (Object.keys(legacy).length > 0 && uid()) {
+    // The marker prevents legacy projects from leaking into a second account on the same browser.
+    const canMigrateLegacy = !!uid() && !localStorage.getItem(LEGACY_MIGRATION_KEY);
+    const legacy = canMigrateLegacy ? JSON.parse(localStorage.getItem(LEGACY_KEY) || '{}') : {};
+    if (Object.keys(legacy).length > 0) {
       localStorage.setItem(localKey(), JSON.stringify(legacy));
+      localStorage.setItem(LEGACY_MIGRATION_KEY, uid() || 'done');
       return legacy;
     }
     return scoped;
@@ -95,7 +99,7 @@ async function saveCloud(project: Project) {
   await setDoc(doc(firestore, 'users', userId, 'projects', project.id), {
     id: project.id,
     name: project.name,
-    updatedAt: new Date(project.updatedAt).toISOString(),
+    updatedAt: project.updatedAt.toISOString(),
     data: JSON.stringify(project),
   });
 }
