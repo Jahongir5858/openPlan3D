@@ -21,6 +21,7 @@ type SessionRow = {
 
 const SESSION_DAYS = 30;
 const PBKDF2_ITERATIONS = 210_000;
+const SESSION_COOKIE = 'openplan3d_session';
 
 function json(data: unknown, status = 200, extraHeaders: HeadersInit = {}) {
   return new Response(JSON.stringify(data), {
@@ -28,6 +29,7 @@ function json(data: unknown, status = 200, extraHeaders: HeadersInit = {}) {
     headers: {
       'content-type': 'application/json; charset=utf-8',
       'cache-control': 'no-store',
+      'x-content-type-options': 'nosniff',
       ...extraHeaders,
     },
   });
@@ -88,13 +90,35 @@ function timingSafeEqual(a: string, b: string) {
   return diff === 0;
 }
 
-function bearer(request: Request) {
+function cookieToken(request: Request) {
+  const raw = request.headers.get('cookie') ?? '';
+  for (const part of raw.split(';')) {
+    const [name, ...rest] = part.trim().split('=');
+    if (name === SESSION_COOKIE) return decodeURIComponent(rest.join('='));
+  }
+  return '';
+}
+
+function bearerToken(request: Request) {
   const value = request.headers.get('authorization') ?? '';
   return value.startsWith('Bearer ') ? value.slice(7).trim() : '';
 }
 
+function sessionToken(request: Request) {
+  // Cookie is the normal browser path. Bearer support is retained for API tooling.
+  return cookieToken(request) || bearerToken(request);
+}
+
+function sessionCookie(token: string, maxAge: number) {
+  return `${SESSION_COOKIE}=${encodeURIComponent(token)}; Path=/; Max-Age=${maxAge}; HttpOnly; Secure; SameSite=Strict`;
+}
+
+function clearSessionCookie() {
+  return `${SESSION_COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Strict`;
+}
+
 async function sessionUser(request: Request, env: Env): Promise<SessionRow | null> {
-  const token = bearer(request);
+  const token = sessionToken(request);
   if (!token) return null;
   const tokenHash = await sha256(token);
   const row = await env.DB.prepare(
@@ -187,18 +211,22 @@ async function login(request: Request, env: Env) {
 
   // Opportunistic cleanup of expired sessions.
   await env.DB.prepare('DELETE FROM sessions WHERE expires_at < ?').bind(now.toISOString()).run();
-  return json({ token, username: user.username, expiresAt: expires.toISOString() });
+  return json(
+    { username: user.username, expiresAt: expires.toISOString() },
+    200,
+    { 'set-cookie': sessionCookie(token, SESSION_DAYS * 86400) },
+  );
 }
 
 async function logout(request: Request, env: Env) {
-  const token = bearer(request);
+  const token = sessionToken(request);
   if (token) await env.DB.prepare('DELETE FROM sessions WHERE token_hash = ?').bind(await sha256(token)).run();
-  return json({ ok: true });
+  return json({ ok: true }, 200, { 'set-cookie': clearSessionCookie() });
 }
 
 async function me(request: Request, env: Env) {
   const user = await sessionUser(request, env);
-  if (!user) return json({ authenticated: false }, 401);
+  if (!user) return json({ authenticated: false }, 401, { 'set-cookie': clearSessionCookie() });
   return json({ authenticated: true, username: user.username, userId: user.user_id, expiresAt: user.expires_at });
 }
 
