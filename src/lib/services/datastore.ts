@@ -135,6 +135,11 @@ function localList() {
   });
 }
 
+function time(value: string | Date | undefined) {
+  const n = value ? new Date(value).getTime() : 0;
+  return Number.isFinite(n) ? n : 0;
+}
+
 export const localStore: DataStore = {
   async save(project) {
     // Local backup is immediate. Cloud writes are throttled to at most once/30s per project.
@@ -152,22 +157,29 @@ export const localStore: DataStore = {
   },
 
   async load(id) {
+    const raw = getAll()[id];
+    const local = raw ? revive(raw) : null;
+
     try {
       if (currentCloudUser()) {
-        const cloud = await loadCloudProject(id);
-        if (cloud?.data) {
-          const project = revive(cloud.data);
-          saveLocal(project);
-          return project;
+        const cloudRow = await loadCloudProject(id);
+        if (cloudRow?.data) {
+          const cloud = revive(cloudRow.data);
+          // Never replace an unsynced/newer browser copy with an older cloud copy.
+          if (local && time(local.updatedAt) > time(cloud.updatedAt)) {
+            try { await pushCloud(local); }
+            catch (e) { console.warn('[DataStore] Newer local copy could not be synced yet.', e); }
+            return local;
+          }
+          saveLocal(cloud);
+          return cloud;
         }
       }
     } catch (e) {
       console.warn('[DataStore] Cloud load failed; local backup will be used.', e);
     }
 
-    const raw = getAll()[id];
-    if (!raw) return null;
-    const local = revive(raw);
+    if (!local) return null;
     try { await pushCloud(local); } catch (e) { console.warn('[DataStore] Local-to-cloud migration failed.', e); }
     return local;
   },
@@ -178,22 +190,26 @@ export const localStore: DataStore = {
     try {
       const cloud = await listCloudProjects();
       const merged = new Map<string, { id: string; name: string; updatedAt: string }>();
-      for (const p of local) merged.set(p.id, p);
       for (const p of cloud) merged.set(p.id, p);
-
-      // Upload browser-only projects once after login.
-      const cloudIds = new Set(cloud.map((p) => p.id));
-      for (const item of local) {
-        if (cloudIds.has(item.id)) continue;
-        const raw = getAll()[item.id];
-        if (!raw) continue;
-        try { await pushCloud(revive(raw)); }
-        catch (e) { console.warn('[DataStore] Cloud migration failed.', e); }
+      for (const p of local) {
+        const existing = merged.get(p.id);
+        if (!existing || time(p.updatedAt) > time(existing.updatedAt)) merged.set(p.id, p);
       }
-      return Array.from(merged.values());
+
+      // Upload projects that only exist locally, or whose local backup is newer.
+      const cloudById = new Map(cloud.map((p) => [p.id, p]));
+      for (const item of local) {
+        const cloudItem = cloudById.get(item.id);
+        if (cloudItem && time(cloudItem.updatedAt) >= time(item.updatedAt)) continue;
+        const localRaw = getAll()[item.id];
+        if (!localRaw) continue;
+        try { await pushCloud(revive(localRaw)); }
+        catch (e) { console.warn('[DataStore] Cloud migration/sync failed.', e); }
+      }
+      return Array.from(merged.values()).sort((a, b) => time(b.updatedAt) - time(a.updatedAt));
     } catch (e) {
       console.warn('[DataStore] Cloud list failed; local backup will be used.', e);
-      return local;
+      return local.sort((a, b) => time(b.updatedAt) - time(a.updatedAt));
     }
   },
 
