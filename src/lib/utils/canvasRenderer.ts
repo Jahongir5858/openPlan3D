@@ -10,7 +10,7 @@ import type { ProjectSettings } from '$lib/stores/settings';
 import { formatLength, formatArea } from '$lib/stores/settings';
 import { getCatalogItem } from '$lib/utils/furnitureCatalog';
 import { drawFurnitureIcon } from '$lib/utils/furnitureIcons';
-import { getRoomPolygon, roomCentroid } from '$lib/utils/roomDetection';
+import { getRoomPolygon, insetPolygonByWalls, roomCentroid } from '$lib/utils/roomDetection';
 import { getWallTextureCanvas, getFloorTextureCanvas } from '$lib/utils/textureGenerator';
 import { getEntourageDef } from '$lib/utils/entourageCatalog';
 import type { EntourageItem, CustomEntourageDef } from '$lib/models/types';
@@ -94,6 +94,57 @@ export function wallEdgeInsets(w: Wall, allWalls: Wall[]): { start: number; end:
     return inset;
   };
   return { start: insetAt(w.start), end: insetAt(w.end) };
+}
+
+/**
+ * How far a wall must run PAST each of its endpoints so that its solid volume
+ * fills the corner where another wall meets it.
+ *
+ * A wall is a slab of half-width t/2 around its centerline. Two walls whose
+ * centerlines meet at a shared endpoint therefore leave an unfilled wedge at
+ * the outside of the corner — in 3D this shows up as a square notch bitten out
+ * of the corner. For this wall to reach the far face of the other wall it must
+ * overrun the joint by (otherThickness / 2) / sin(theta), where theta is the
+ * angle between the two walls. At a right angle that is exactly
+ * otherThickness / 2; at shallower angles it grows, so it is clamped by a
+ * miter limit to avoid long spikes.
+ *
+ * Collinear continuations are skipped: they have nothing to fill, and sin(theta)
+ * would be ~0.
+ */
+export function wallJoinExtensions(w: Wall, allWalls: Wall[]): { start: number; end: number } {
+  const EP = 5;
+  const MITER_LIMIT = 4; // multiples of the other wall's thickness
+  const wdx = w.end.x - w.start.x;
+  const wdy = w.end.y - w.start.y;
+  const wl = Math.hypot(wdx, wdy) || 1;
+  const fwd = { x: wdx / wl, y: wdy / wl };
+
+  /** `away` = unit direction of THIS wall pointing away from the joint at `pt`. */
+  const extAt = (pt: Point, away: Point): number => {
+    let ext = 0;
+    for (const other of allWalls) {
+      if (other.id === w.id || other.curvePoint) continue;
+      const atStart = Math.abs(other.start.x - pt.x) < EP && Math.abs(other.start.y - pt.y) < EP;
+      const atEnd = Math.abs(other.end.x - pt.x) < EP && Math.abs(other.end.y - pt.y) < EP;
+      if (!atStart && !atEnd) continue;
+      // Direction of the other wall pointing away from the same joint
+      const far = atStart ? other.end : other.start;
+      const ox = far.x - pt.x;
+      const oy = far.y - pt.y;
+      const ol = Math.hypot(ox, oy) || 1;
+      const sin = Math.abs(away.x * (oy / ol) - away.y * (ox / ol));
+      if (sin < 0.1) continue; // collinear continuation — no corner to fill
+      const t = Math.max(other.thickness, 1);
+      ext = Math.max(ext, Math.min(t / 2 / sin, t * MITER_LIMIT));
+    }
+    return ext;
+  };
+
+  return {
+    start: extAt(w.start, fwd),
+    end: extAt(w.end, { x: -fwd.x, y: -fwd.y }),
+  };
 }
 
 // ── Coordinate conversion (local helpers using CanvasState) ─────────
@@ -1510,14 +1561,21 @@ export function drawRooms(
     }
 
     if (showDimensions && dimSettings.showInternalDimensions && poly.length >= 3) {
+      // "Internal" means inside the walls, so measure the clear polygon rather
+      // than the centerline one — otherwise this label reports half a wall's
+      // thickness of space that isn't there on each side. `poly` is already in
+      // hand, so inset it directly instead of paying for getRoomPolygon twice.
+      const ids = new Set(room.walls);
+      const clear = insetPolygonByWalls(poly, floor.walls.filter(w => ids.has(w.id)));
+      const src = clear.length >= 3 ? clear : poly;
       let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-      for (const pt of poly) { if (pt.x < minX) minX = pt.x; if (pt.x > maxX) maxX = pt.x; if (pt.y < minY) minY = pt.y; if (pt.y > maxY) maxY = pt.y; }
-      const roomW = (maxX - minX) / 100;
-      const roomD = (maxY - minY) / 100;
-      if (roomW > 0.1 && roomD > 0.1) {
+      for (const pt of src) { if (pt.x < minX) minX = pt.x; if (pt.x > maxX) maxX = pt.x; if (pt.y < minY) minY = pt.y; if (pt.y > maxY) maxY = pt.y; }
+      const roomW = maxX - minX;
+      const roomD = maxY - minY;
+      if (roomW > 10 && roomD > 10) {
         const dimFontSize = Math.max(9, 10 * zoom);
         ctx.fillStyle = '#b0b8c4'; ctx.font = `${dimFontSize}px sans-serif`;
-        ctx.fillText(`${formatLength(roomW * 100, dimSettings.units)} × ${formatLength(roomD * 100, dimSettings.units)}`, sc.x, sc.y + fontSize + 2);
+        ctx.fillText(`${formatLength(roomW, dimSettings.units)} × ${formatLength(roomD, dimSettings.units)}`, sc.x, sc.y + fontSize + 2);
       }
     }
   }
