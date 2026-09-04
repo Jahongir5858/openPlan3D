@@ -1,17 +1,32 @@
-import { initializeApp } from 'firebase/app';
-import { getAnalytics, isSupported } from 'firebase/analytics';
+import { getApps, initializeApp, type FirebaseApp } from 'firebase/app';
+import { getAuth, type Auth } from 'firebase/auth';
+import { getFirestore, type Firestore } from 'firebase/firestore';
 
 const firebaseConfig = {
-  apiKey: 'AIzaSyBA-uD92gwICfqpqFH4EVC_CDHMLBNAemo',
-  authDomain: 'openplan3d.firebaseapp.com',
-  projectId: 'openplan3d',
-  storageBucket: 'openplan3d.firebasestorage.app',
-  messagingSenderId: '821030103548',
-  appId: '1:821030103548:web:daa8f23b8348b8cb322a79',
-  measurementId: 'G-SSDH4GMGFP',
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || '',
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || '',
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || '',
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || '',
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || '',
+  appId: import.meta.env.VITE_FIREBASE_APP_ID || '',
 };
 
-export const app = initializeApp(firebaseConfig);
+export const firebaseConfigured = Boolean(
+  firebaseConfig.apiKey &&
+  firebaseConfig.authDomain &&
+  firebaseConfig.projectId &&
+  firebaseConfig.appId
+);
 
-// Only init analytics in browser (not during SSR/build)
-export const analytics = isSupported().then((yes) => (yes ? getAnalytics(app) : null));
+export let app: FirebaseApp | null = null;
+export let auth: Auth | null = null;
+export let db: Firestore | null = null;
+
+if (firebaseConfigured) {
+  app = getApps().length ? getApps()[0] : initializeApp(firebaseConfig);
+  // Auth state and Firestore reads/writes are only needed in the browser.
+  if (typeof window !== 'undefined') {
+    auth = getAuth(app);
+    db = getFirestore(app);
+  }
+}
