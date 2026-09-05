@@ -27,7 +27,7 @@
     const buttons = [...document.querySelectorAll('button')];
     return (buttons.find((button) => {
       const text = (button.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
-      return text === 'import json' || text.includes('json import') || text.includes('json faylni import');
+      return text.includes('json') && text.includes('import');
     }) as HTMLButtonElement | undefined) ?? null;
   }
 
