@@ -20,33 +20,52 @@ export interface Wall {
 
 export type RoomCategory = 'indoor' | 'outdoor' | 'garage' | 'utility';
 
+/** Hatch applied on top of a zone's colour so the plan survives a mono copy. */
+export type ZonePattern = 'none' | 'diag-l' | 'diag-r' | 'dots' | 'grid' | 'cross';
+
+/**
+ * A service delivered in the building. Zones are flat and independent — there
+ * is deliberately no grouping, because the services a social-care centre runs
+ * are not a hierarchy. Colour is an aid; `code` is what actually identifies a
+ * room on paper, in a mono photocopy, and over the phone.
+ */
+export interface Zone {
+  id: string;
+  code: string;
+  name: string;
+  color: string;
+  pattern?: ZonePattern;
+  areaPerClient?: number;
+}
+
 export interface Room {
   id: string;
   name: string;
   walls: string[];
   floorTexture: string;
+  zoneId?: string;
   area: number;
+  grossArea?: number;
   color?: string;
   roomType?: RoomCategory;
-  /** Custom label position offset from centroid (in world units) */
   labelOffset?: Point;
 }
 
 export interface Door {
   id: string;
   wallId: string;
-  position: number; // 0-1 along wall
+  position: number;
   width: number;
   height: number;
   type: 'single' | 'double' | 'sliding' | 'french' | 'pocket' | 'bifold' | 'opening' | 'garage';
   swingDirection: 'left' | 'right';
-  flipSide: boolean; // flip which side of wall the door opens to (vertical flip)
+  flipSide: boolean;
 }
 
 export interface Window {
   id: string;
   wallId: string;
-  position: number; // 0-1 along wall
+  position: number;
   width: number;
   height: number;
   sillHeight: number;
@@ -59,31 +78,63 @@ export interface FurnitureItem {
   position: Point;
   rotation: number;
   scale: { x: number; y: number; z: number };
-  // Per-item overrides (optional — falls back to catalog defaults)
   color?: string;
-  width?: number;   // cm
-  depth?: number;   // cm
-  height?: number;  // cm
-  material?: string; // material name/id
+  width?: number;
+  depth?: number;
+  height?: number;
+  material?: string;
   locked?: boolean;
 }
 
-export interface ElementGroup {
-  id: string;
-  elementIds: string[];
-}
-
+export interface ElementGroup { id: string; elementIds: string[]; }
 export type StairType = 'straight' | 'l-shaped' | 'u-shaped' | 'spiral';
 
-export interface Stair {
+export interface VerticalSpan {
+  fromLevel?: number;
+  toLevel?: number;
+}
+
+export interface Stair extends VerticalSpan {
   id: string;
   position: Point;
   rotation: number;
-  width: number;   // default 100cm
-  depth: number;   // default 300cm
-  riserCount: number; // default 14
+  width: number;
+  depth: number;
+  riserCount: number;
   direction: 'up' | 'down';
-  stairType: StairType; // default 'straight'
+  stairType: StairType;
+  rise?: number;
+  handrail?: 'none' | 'left' | 'right' | 'both';
+}
+
+export type LiftKind = 'passenger' | 'accessible' | 'service' | 'stretcher';
+export interface Lift extends VerticalSpan {
+  id: string;
+  position: Point;
+  rotation: number;
+  width: number;
+  depth: number;
+  cabinWidth: number;
+  cabinDepth: number;
+  doorSide: 'front' | 'back' | 'left' | 'right';
+  doorWidth: number;
+  kind: LiftKind;
+  label?: string;
+}
+
+export interface RampLanding { at: number; length: number; }
+export interface Ramp extends VerticalSpan {
+  id: string;
+  position: Point;
+  rotation: number;
+  width: number;
+  runLength: number;
+  rise: number;
+  handrail?: 'none' | 'left' | 'right' | 'both';
+  topLanding?: number;
+  bottomLanding?: number;
+  landings?: RampLanding[];
+  direction: 'up' | 'down';
 }
 
 export interface Column {
@@ -91,72 +142,18 @@ export interface Column {
   position: Point;
   rotation: number;
   shape: 'round' | 'square';
-  diameter: number;  // cm (for round) or side length (for square)
-  height: number;    // cm
+  diameter: number;
+  height: number;
   color: string;
 }
 
-export interface Measurement {
-  id: string;
-  x1: number;
-  y1: number;
-  x2: number;
-  y2: number;
-}
-
-export interface Annotation {
-  id: string;
-  x1: number;
-  y1: number;
-  x2: number;
-  y2: number;
-  label?: string;
-  offset: number; // perpendicular offset for dimension line (default 40)
-}
-
-export interface TextAnnotation {
-  id: string;
-  x: number;
-  y: number;
-  text: string;
-  fontSize: number;
-  color: string;
-  rotation: number;
-}
-
-export interface GuideLine {
-  id: string;
-  orientation: 'horizontal' | 'vertical';
-  position: number; // world coordinate (x for vertical, y for horizontal)
-}
-
-export interface BackgroundImage {
-  dataUrl: string;
-  position: Point;
-  scale: number;
-  opacity: number;
-  rotation: number;
-  locked: boolean;
-}
-
-/** A placed 2D entourage symbol (person, car, tree, …) for presentation plans */
-export interface EntourageItem {
-  id: string;
-  defId: string; // id of a built-in EntourageDef or a project CustomEntourageDef
-  position: Point; // center, world cm
-  width: number; // real-world width in cm
-  rotation: number; // degrees
-  opacity?: number; // 0–1, default 1
-  locked?: boolean;
-}
-
-/** User-uploaded PNG entourage symbol, stored on the project */
-export interface CustomEntourageDef {
-  id: string;
-  name: string;
-  dataUrl: string; // PNG as data URL
-  aspect: number; // height / width
-}
+export interface Measurement { id: string; x1: number; y1: number; x2: number; y2: number; }
+export interface Annotation { id: string; x1: number; y1: number; x2: number; y2: number; label?: string; offset: number; }
+export interface TextAnnotation { id: string; x: number; y: number; text: string; fontSize: number; color: string; rotation: number; }
+export interface GuideLine { id: string; orientation: 'horizontal' | 'vertical'; position: number; }
+export interface BackgroundImage { dataUrl: string; position: Point; scale: number; opacity: number; rotation: number; locked: boolean; }
+export interface EntourageItem { id: string; defId: string; position: Point; width: number; rotation: number; opacity?: number; locked?: boolean; }
+export interface CustomEntourageDef { id: string; name: string; dataUrl: string; aspect: number; }
 
 export interface Floor {
   id: string;
@@ -168,6 +165,8 @@ export interface Floor {
   windows: Window[];
   furniture: FurnitureItem[];
   stairs: Stair[];
+  lifts?: Lift[];
+  ramps?: Ramp[];
   columns: Column[];
   backgroundImage?: BackgroundImage;
   guides: GuideLine[];
@@ -187,4 +186,34 @@ export interface Project {
   createdAt: Date;
   updatedAt: Date;
   customEntourage?: CustomEntourageDef[];
+  zones?: Zone[];
+  norms?: AccessibilityNorms;
 }
+
+export interface AccessibilityNorms {
+  minDoorClearWidth: number;
+  minCorridorWidth: number;
+  minTurningDiameter: number;
+  maxRampSlopePercent: number;
+  maxRampRunWithoutLanding: number;
+  minRampLanding: number;
+  minLiftCabinWidth: number;
+  minLiftCabinDepth: number;
+  maxRiserHeight: number;
+  minTreadDepth: number;
+  minStairWidth: number;
+}
+
+export const DEFAULT_NORMS: AccessibilityNorms = {
+  minDoorClearWidth: 90,
+  minCorridorWidth: 150,
+  minTurningDiameter: 150,
+  maxRampSlopePercent: 8,
+  maxRampRunWithoutLanding: 900,
+  minRampLanding: 150,
+  minLiftCabinWidth: 110,
+  minLiftCabinDepth: 140,
+  maxRiserHeight: 17,
+  minTreadDepth: 30,
+  minStairWidth: 120,
+};
