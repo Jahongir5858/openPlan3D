@@ -1,5 +1,7 @@
 import { writable, derived, get } from 'svelte/store';
-import type { Project, Floor, Wall, Door, Window as Win, FurnitureItem, Point, Stair, Column, BackgroundImage, GuideLine, ElementGroup, EntourageItem } from '$lib/models/types';
+import type { Project, Floor, Wall, Door, Window as Win, FurnitureItem, Point, Stair, Lift, Ramp, Column, BackgroundImage, GuideLine, ElementGroup, EntourageItem, Zone, AccessibilityNorms } from '$lib/models/types';
+import { DEFAULT_NORMS } from '$lib/models/types';
+import { defaultZoneStyle } from '$lib/utils/zones';
 
 
 function uid(): string {
@@ -343,6 +345,172 @@ export function removeStair(id: string) {
     if (!f.stairs) return;
     f.stairs = f.stairs.filter((s) => s.id !== id);
   });
+}
+
+
+// ── Service zones ────────────────────────────────────────────────────
+//
+// Zones live on the project, not the floor: an organisation defines its
+// services once and every storey draws from the same list, so a service can't
+// end up a different colour on the ground floor than on the first.
+
+/** When set, only this service is coloured on the plan; everything else greys out. */
+export const highlightZoneId = writable<string | null>(null);
+
+/** Mutate the project itself (not a floor) with an undo snapshot. */
+function mutateProject(fn: (p: Project) => void, description?: string, coalesceKey?: string) {
+  const p = get(currentProject);
+  if (!p) return;
+  snapshot(description, coalesceKey);
+  fn(p);
+  p.updatedAt = new Date();
+  currentProject.set({ ...p });
+}
+
+export function addZone(name: string, code?: string): string {
+  const id = uid();
+  mutateProject((p) => {
+    if (!p.zones) p.zones = [];
+    const style = defaultZoneStyle(p.zones.length);
+    p.zones.push({
+      id,
+      code: code ?? String(p.zones.length + 1).padStart(2, '0'),
+      name,
+      color: style.color,
+      pattern: style.pattern,
+    });
+  }, 'Added service');
+  return id;
+}
+
+export function updateZone(id: string, updates: Partial<Zone>) {
+  mutateProject((p) => {
+    const z = p.zones?.find((z) => z.id === id);
+    if (z) Object.assign(z, updates);
+  }, undefined, coalesceKeyFor('zone', id, updates));
+}
+
+/** Removing a service also clears it from every room that referenced it. */
+export function removeZone(id: string) {
+  mutateProject((p) => {
+    p.zones = (p.zones ?? []).filter((z) => z.id !== id);
+    for (const floor of p.floors) {
+      for (const room of floor.rooms ?? []) {
+        if (room.zoneId === id) room.zoneId = undefined;
+      }
+    }
+  }, 'Removed service');
+  if (get(highlightZoneId) === id) highlightZoneId.set(null);
+}
+
+export function assignRoomZone(roomId: string, zoneId: string | undefined) {
+  mutate((f) => {
+    const room = f.rooms?.find((r) => r.id === roomId);
+    if (room) room.zoneId = zoneId;
+  }, 'Assigned service');
+}
+
+export function setNorms(updates: Partial<AccessibilityNorms>) {
+  mutateProject((p) => {
+    p.norms = { ...DEFAULT_NORMS, ...(p.norms ?? {}), ...updates };
+  }, undefined, coalesceKeyFor('norms', 'project', updates));
+}
+
+// ── Lifts ────────────────────────────────────────────────────────────
+
+export const placingLift = writable<boolean>(false);
+
+export function addLift(position: Point): string {
+  const id = uid();
+  mutate((f) => {
+    if (!f.lifts) f.lifts = [];
+    // Shaft sized around an accessible cabin plus structure
+    f.lifts.push({
+      id, position, rotation: 0,
+      width: 160, depth: 180,
+      cabinWidth: 110, cabinDepth: 140,
+      doorSide: 'front', doorWidth: 90,
+      kind: 'accessible',
+      fromLevel: 0, toLevel: Math.max(0, f.level),
+    });
+  }, 'Added lift');
+  return id;
+}
+
+export function updateLift(id: string, updates: Partial<Lift>) {
+  mutate((f) => {
+    const l = f.lifts?.find((l) => l.id === id);
+    if (l) Object.assign(l, updates);
+  }, undefined, coalesceKeyFor('lift', id, updates));
+}
+
+export function removeLift(id: string) {
+  mutate((f) => { f.lifts = (f.lifts ?? []).filter((l) => l.id !== id); });
+}
+
+export function moveLift(id: string, position: Point) {
+  const p = get(currentProject);
+  if (!p) return;
+  const floor = p.floors.find((f) => f.id === p.activeFloorId);
+  const l = floor?.lifts?.find((l) => l.id === id);
+  if (l) {
+    l.position = position;
+    p.updatedAt = new Date();
+    currentProject.set({ ...p });
+  }
+}
+
+// ── Ramps ────────────────────────────────────────────────────────────
+
+export const placingRamp = writable<boolean>(false);
+
+export function addRamp(position: Point): string {
+  const id = uid();
+  mutate((f) => {
+    if (!f.ramps) f.ramps = [];
+    // A 15 cm rise at the default 8% limit needs a 187.5 cm run, rounded up
+    f.ramps.push({
+      id, position, rotation: 0,
+      width: 150, runLength: 190, rise: 15,
+      handrail: 'both',
+      topLanding: 150, bottomLanding: 150,
+      landings: [],
+      direction: 'up',
+    });
+  }, 'Added ramp');
+  return id;
+}
+
+export function updateRamp(id: string, updates: Partial<Ramp>) {
+  mutate((f) => {
+    const r = f.ramps?.find((r) => r.id === id);
+    if (r) Object.assign(r, updates);
+  }, undefined, coalesceKeyFor('ramp', id, updates));
+}
+
+export function removeRamp(id: string) {
+  mutate((f) => { f.ramps = (f.ramps ?? []).filter((r) => r.id !== id); });
+}
+
+export function moveRamp(id: string, position: Point) {
+  const p = get(currentProject);
+  if (!p) return;
+  const floor = p.floors.find((f) => f.id === p.activeFloorId);
+  const r = floor?.ramps?.find((r) => r.id === id);
+  if (r) {
+    r.position = position;
+    p.updatedAt = new Date();
+    currentProject.set({ ...p });
+  }
+}
+
+/** Set the run length so the ramp meets a slope limit for its rise. */
+export function fitRampToSlope(id: string, maxSlopePercent: number) {
+  mutate((f) => {
+    const r = f.ramps?.find((r) => r.id === id);
+    if (!r || maxSlopePercent <= 0) return;
+    r.runLength = Math.ceil((r.rise / maxSlopePercent) * 100);
+  }, 'Fitted ramp to slope');
 }
 
 export function moveStair(id: string, position: Point) {

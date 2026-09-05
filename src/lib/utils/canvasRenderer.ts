@@ -3,14 +3,15 @@
  * All functions are pure — they take canvas context + data and render.
  * Extracted from FloorPlanCanvas.svelte.
  */
-import type { Point, Wall, Door, Window as Win, FurnitureItem, Stair, Column, Floor, Annotation } from '$lib/models/types';
+import type { Point, Wall, Door, Window as Win, FurnitureItem, Stair, Lift, Ramp, Column, Floor, Annotation, Zone } from '$lib/models/types';
 import type { Room } from '$lib/models/types';
 import type { CanvasState } from '$lib/utils/canvasInteraction';
 import type { ProjectSettings } from '$lib/stores/settings';
 import { formatLength, formatArea } from '$lib/stores/settings';
 import { getCatalogItem } from '$lib/utils/furnitureCatalog';
 import { drawFurnitureIcon } from '$lib/utils/furnitureIcons';
-import { getRoomPolygon, roomCentroid } from '$lib/utils/roomDetection';
+import { getRoomPolygon, insetPolygonByWalls, roomCentroid } from '$lib/utils/roomDetection';
+import { zoneHatch } from '$lib/utils/zones';
 import { getWallTextureCanvas, getFloorTextureCanvas } from '$lib/utils/textureGenerator';
 import { getEntourageDef } from '$lib/utils/entourageCatalog';
 import type { EntourageItem, CustomEntourageDef } from '$lib/models/types';
@@ -94,6 +95,57 @@ export function wallEdgeInsets(w: Wall, allWalls: Wall[]): { start: number; end:
     return inset;
   };
   return { start: insetAt(w.start), end: insetAt(w.end) };
+}
+
+/**
+ * How far a wall must run PAST each of its endpoints so that its solid volume
+ * fills the corner where another wall meets it.
+ *
+ * A wall is a slab of half-width t/2 around its centerline. Two walls whose
+ * centerlines meet at a shared endpoint therefore leave an unfilled wedge at
+ * the outside of the corner — in 3D this shows up as a square notch bitten out
+ * of the corner. For this wall to reach the far face of the other wall it must
+ * overrun the joint by (otherThickness / 2) / sin(theta), where theta is the
+ * angle between the two walls. At a right angle that is exactly
+ * otherThickness / 2; at shallower angles it grows, so it is clamped by a
+ * miter limit to avoid long spikes.
+ *
+ * Collinear continuations are skipped: they have nothing to fill, and sin(theta)
+ * would be ~0.
+ */
+export function wallJoinExtensions(w: Wall, allWalls: Wall[]): { start: number; end: number } {
+  const EP = 5;
+  const MITER_LIMIT = 4; // multiples of the other wall's thickness
+  const wdx = w.end.x - w.start.x;
+  const wdy = w.end.y - w.start.y;
+  const wl = Math.hypot(wdx, wdy) || 1;
+  const fwd = { x: wdx / wl, y: wdy / wl };
+
+  /** `away` = unit direction of THIS wall pointing away from the joint at `pt`. */
+  const extAt = (pt: Point, away: Point): number => {
+    let ext = 0;
+    for (const other of allWalls) {
+      if (other.id === w.id || other.curvePoint) continue;
+      const atStart = Math.abs(other.start.x - pt.x) < EP && Math.abs(other.start.y - pt.y) < EP;
+      const atEnd = Math.abs(other.end.x - pt.x) < EP && Math.abs(other.end.y - pt.y) < EP;
+      if (!atStart && !atEnd) continue;
+      // Direction of the other wall pointing away from the same joint
+      const far = atStart ? other.end : other.start;
+      const ox = far.x - pt.x;
+      const oy = far.y - pt.y;
+      const ol = Math.hypot(ox, oy) || 1;
+      const sin = Math.abs(away.x * (oy / ol) - away.y * (ox / ol));
+      if (sin < 0.1) continue; // collinear continuation — no corner to fill
+      const t = Math.max(other.thickness, 1);
+      ext = Math.max(ext, Math.min(t / 2 / sin, t * MITER_LIMIT));
+    }
+    return ext;
+  };
+
+  return {
+    start: extAt(w.start, fwd),
+    end: extAt(w.end, { x: -fwd.x, y: -fwd.y }),
+  };
 }
 
 // ── Coordinate conversion (local helpers using CanvasState) ─────────
@@ -1027,9 +1079,15 @@ export function drawStair(cs: CanvasState, stair: Stair, selected: boolean): voi
     ctx.font = `${Math.max(8, 10 * zoom)}px sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    const sType = stair.stairType || 'straight';
-    const typeLabel = sType === 'straight' ? '' : ` (${sType})`;
-    ctx.fillText((stair.direction === 'up' ? 'UP' : 'DN') + typeLabel, 0, 0);
+    const arrow = stair.direction === 'up' ? '\u2191' : '\u2193';
+    ctx.fillText(arrow, 0, 0);
+    // The schedule note is what gets checked, so draw it from the geometry
+    const formula = stairFormula(stair);
+    if (formula && w > 44) {
+      ctx.font = `${Math.max(7, 8.5 * zoom)}px sans-serif`;
+      ctx.fillStyle = '#6b7280';
+      ctx.fillText(formula, 0, 13 * zoom);
+    }
   }
 
   if (type === 'straight') {
@@ -1046,6 +1104,7 @@ export function drawStair(cs: CanvasState, stair: Stair, selected: boolean): voi
       ctx.beginPath(); ctx.moveTo(-w / 2, y); ctx.lineTo(w / 2, y); ctx.stroke();
     }
     drawStairArrowLocal(stair.direction);
+    if (stairContinues(stair)) drawStairBreakLine(ctx, w, d, 0.62);
     drawStairLabelLocal();
 
   } else if (type === 'l-shaped') {
@@ -1136,6 +1195,222 @@ export function drawStair(cs: CanvasState, stair: Stair, selected: boolean): voi
 }
 
 // ── Column drawing ───────────────────────────────────────────────────
+
+/**
+ * Whether a stair run carries on past the storey being drawn, and so should be
+ * cut by a break line. A run recorded as spanning more than one level does;
+ * one that stops here is drawn whole.
+ */
+export function stairContinues(stair: Stair): boolean {
+  if (stair.fromLevel === undefined || stair.toLevel === undefined) return true;
+  return stair.toLevel > stair.fromLevel;
+}
+
+/**
+ * Break line across a stair run.
+ *
+ * A floor plan is a horizontal cut roughly a metre above the floor, so a stair
+ * is shown cut: the lower flight in full, the upper flight sliced away by a
+ * pair of parallel diagonals. Drawing every tread of every flight — which is
+ * what the app did before — reads as an axonometric, not a plan, and an
+ * inspector will send it back.
+ *
+ * Skipped when the stair does not continue past this storey; a run that stops
+ * at a landing is drawn whole.
+ */
+function drawStairBreakLine(
+  ctx: CanvasRenderingContext2D,
+  w: number, d: number, atFraction: number,
+): void {
+  const y = -d / 2 + d * atFraction;
+  const rise = Math.min(d * 0.12, w * 0.35);
+  const gap = Math.max(4, Math.min(10, w * 0.09));
+
+  ctx.save();
+  ctx.strokeStyle = '#374151';
+  ctx.lineWidth = 1.2;
+  ctx.setLineDash([]);
+  for (const off of [-gap / 2, gap / 2]) {
+    ctx.beginPath();
+    ctx.moveTo(-w / 2 - 3, y + off + rise);
+    ctx.lineTo(w / 2 + 3, y + off - rise);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+/** Stair schedule note, e.g. "14 × 175 = 2450" — the line an inspector reads. */
+export function stairFormula(stair: Stair): string | null {
+  if (!stair.rise || stair.riserCount <= 0) return null;
+  const riser = Math.round((stair.rise / stair.riserCount) * 10) / 10;
+  return `${stair.riserCount} × ${riser} = ${Math.round(stair.rise)}`;
+}
+
+/**
+ * A lift in plan: the shaft outline, the cabin inside it, the two diagonals
+ * that mark a shaft on every architectural drawing, and a gap in the shaft wall
+ * where the doors are.
+ */
+export function drawLift(cs: CanvasState, lift: Lift, selected: boolean): void {
+  const { ctx, zoom } = cs;
+  const s = wts(cs, lift.position.x, lift.position.y);
+  const w = lift.width * zoom;
+  const d = lift.depth * zoom;
+  const cw = lift.cabinWidth * zoom;
+  const cd = lift.cabinDepth * zoom;
+  const angle = (lift.rotation * Math.PI) / 180;
+
+  ctx.save();
+  ctx.translate(s.x, s.y);
+  ctx.rotate(angle);
+
+  const stroke = selected ? '#3b82f6' : '#444';
+
+  ctx.fillStyle = selected ? 'rgba(59,130,246,0.10)' : 'rgba(120,130,140,0.10)';
+  ctx.fillRect(-w / 2, -d / 2, w, d);
+  ctx.strokeStyle = stroke;
+  ctx.lineWidth = selected ? 2 : 1.4;
+  ctx.strokeRect(-w / 2, -d / 2, w, d);
+
+  // Cabin
+  ctx.lineWidth = 1;
+  ctx.strokeRect(-cw / 2, -cd / 2, cw, cd);
+
+  // Shaft diagonals
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(-cw / 2, -cd / 2); ctx.lineTo(cw / 2, cd / 2);
+  ctx.moveTo(cw / 2, -cd / 2); ctx.lineTo(-cw / 2, cd / 2);
+  ctx.stroke();
+
+  // Door opening, drawn as a break in the shaft wall on the chosen side
+  const dw = lift.doorWidth * zoom;
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = (selected ? 2 : 1.4) + 2;
+  ctx.beginPath();
+  switch (lift.doorSide) {
+    case 'front': ctx.moveTo(-dw / 2, d / 2); ctx.lineTo(dw / 2, d / 2); break;
+    case 'back':  ctx.moveTo(-dw / 2, -d / 2); ctx.lineTo(dw / 2, -d / 2); break;
+    case 'left':  ctx.moveTo(-w / 2, -dw / 2); ctx.lineTo(-w / 2, dw / 2); break;
+    case 'right': ctx.moveTo(w / 2, -dw / 2); ctx.lineTo(w / 2, dw / 2); break;
+  }
+  ctx.stroke();
+  ctx.strokeStyle = stroke;
+  ctx.lineWidth = 1.6;
+  ctx.stroke();
+
+  if (Math.min(w, d) > 34) {
+    ctx.fillStyle = '#374151';
+    ctx.font = `${Math.max(8, 9 * zoom)}px sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(lift.label ?? 'LIFT', 0, 0);
+  }
+
+  if (selected) {
+    ctx.strokeStyle = '#3b82f6'; ctx.lineWidth = 1; ctx.setLineDash([4, 3]);
+    ctx.strokeRect(-w / 2 - 2, -d / 2 - 2, w + 4, d + 4);
+    ctx.setLineDash([]);
+  }
+  ctx.restore();
+}
+
+/**
+ * A ramp in plan: the run with its landings, tread lines marking the slope, a
+ * direction arrow that always points uphill, and the slope written on the run.
+ *
+ * The slope note is not decoration — it is the number a plan is checked
+ * against, so it is drawn from the geometry rather than typed by hand and left
+ * to go stale.
+ */
+export function drawRamp(cs: CanvasState, ramp: Ramp, selected: boolean, overSlope = false): void {
+  const { ctx, zoom } = cs;
+  const s = wts(cs, ramp.position.x, ramp.position.y);
+  const angle = (ramp.rotation * Math.PI) / 180;
+  const w = ramp.width * zoom;
+  const bottom = (ramp.bottomLanding ?? 0);
+  const top = (ramp.topLanding ?? 0);
+  const total = (bottom + ramp.runLength + top) * zoom;
+
+  ctx.save();
+  ctx.translate(s.x, s.y);
+  ctx.rotate(angle);
+
+  const stroke = selected ? '#3b82f6' : overSlope ? '#c0392b' : '#444';
+
+  // Whole assembly, bottom landing at +y, rising toward -y
+  ctx.fillStyle = overSlope ? 'rgba(192,57,43,0.10)' : 'rgba(120,130,140,0.09)';
+  ctx.fillRect(-w / 2, -total / 2, w, total);
+  ctx.strokeStyle = stroke;
+  ctx.lineWidth = selected ? 2 : 1.4;
+  ctx.strokeRect(-w / 2, -total / 2, w, total);
+
+  const yAt = (alongCm: number) => total / 2 - (bottom + alongCm) * zoom;
+
+  // Landing edges
+  ctx.lineWidth = 1.2;
+  if (bottom > 0) {
+    const y = total / 2 - bottom * zoom;
+    ctx.beginPath(); ctx.moveTo(-w / 2, y); ctx.lineTo(w / 2, y); ctx.stroke();
+  }
+  if (top > 0) {
+    const y = -total / 2 + top * zoom;
+    ctx.beginPath(); ctx.moveTo(-w / 2, y); ctx.lineTo(w / 2, y); ctx.stroke();
+  }
+  for (const l of ramp.landings ?? []) {
+    for (const at of [l.at, l.at + l.length]) {
+      const y = yAt(at);
+      ctx.beginPath(); ctx.moveTo(-w / 2, y); ctx.lineTo(w / 2, y); ctx.stroke();
+    }
+  }
+
+  // Slope hatching along the run
+  ctx.strokeStyle = overSlope ? 'rgba(192,57,43,0.5)' : 'rgba(80,90,100,0.35)';
+  ctx.lineWidth = 0.6;
+  const stepCm = 25;
+  for (let a = stepCm; a < ramp.runLength; a += stepCm) {
+    if ((ramp.landings ?? []).some(l => a >= l.at && a <= l.at + l.length)) continue;
+    const y = yAt(a);
+    ctx.beginPath(); ctx.moveTo(-w / 2, y); ctx.lineTo(w / 2, y); ctx.stroke();
+  }
+
+  // Direction arrow — always points up the slope
+  const up = ramp.direction !== 'down';
+  ctx.strokeStyle = stroke;
+  ctx.fillStyle = stroke;
+  ctx.lineWidth = 1.6;
+  const tailY = up ? total / 2 - 8 : -total / 2 + 8;
+  const headY = up ? -total / 2 + 10 : total / 2 - 10;
+  ctx.beginPath(); ctx.moveTo(0, tailY); ctx.lineTo(0, headY); ctx.stroke();
+  const dir = up ? -1 : 1;
+  const hw = Math.max(3, Math.min(7, w * 0.12));
+  ctx.beginPath();
+  ctx.moveTo(0, headY);
+  ctx.lineTo(-hw, headY - dir * hw * 1.6);
+  ctx.lineTo(hw, headY - dir * hw * 1.6);
+  ctx.closePath();
+  ctx.fill();
+  ctx.beginPath(); ctx.arc(0, tailY, 2.2, 0, Math.PI * 2); ctx.fill();
+
+  if (w > 40) {
+    const slope = ramp.runLength > 0 ? (ramp.rise / ramp.runLength) * 100 : 0;
+    ctx.fillStyle = overSlope ? '#a3341f' : '#374151';
+    ctx.font = `${Math.max(8, 9.5 * zoom)}px sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.save();
+    ctx.translate(0, 0);
+    ctx.fillText(`${Math.round(slope * 10) / 10}%`, w * 0.28, 0);
+    ctx.restore();
+  }
+
+  if (selected) {
+    ctx.strokeStyle = '#3b82f6'; ctx.lineWidth = 1; ctx.setLineDash([4, 3]);
+    ctx.strokeRect(-w / 2 - 2, -total / 2 - 2, w + 4, total + 4);
+    ctx.setLineDash([]);
+  }
+  ctx.restore();
+}
 
 export function drawColumn(cs: CanvasState, col: Column, selected: boolean): void {
   const { ctx, zoom } = cs;
@@ -1375,6 +1650,21 @@ const ROOM_FILLS_DEFAULT = [
   'rgba(45, 212, 191, 0.07)', 'rgba(251, 146, 60, 0.07)',
 ];
 
+/**
+ * Fill for a room, preferring its service zone.
+ *
+ * At ten flat services the fill has to be stronger than the 12% used for a
+ * handful of room types, or neighbouring hues collapse into each other. The
+ * hatch drawn on top (see drawRooms) carries the distinction when colour can't.
+ */
+export function getZoneFill(zone: Zone): string {
+  const hex = zone.color.replace('#', '');
+  const r = parseInt(hex.substring(0, 2), 16);
+  const g = parseInt(hex.substring(2, 4), 16);
+  const b = parseInt(hex.substring(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, 0.32)`;
+}
+
 export function getRoomFill(room: Room, index: number): string {
   // Solid-color floors (floorTexture 'none') show the room color much more
   // strongly since there is no texture painted on top.
@@ -1479,20 +1769,41 @@ export function drawRooms(
   showRoomLabels: boolean,
   showDimensions: boolean,
   dimSettings: ProjectSettings,
+  zones?: Zone[],
+  /** When set, only this service is coloured and everything else goes neutral. */
+  highlightZoneId?: string | null,
 ): void {
   const { ctx, zoom } = cs;
+  const zoneById = new Map((zones ?? []).map(z => [z.id, z]));
   for (let ri = 0; ri < detectedRooms.length; ri++) {
     const room = detectedRooms[ri];
     const poly = getRoomPolygon(room, floor.walls);
     if (poly.length < 3) continue;
     const screenPoly = poly.map(p => wts(cs, p.x, p.y));
-    ctx.fillStyle = getRoomFill(room, ri);
+
+    const zone = room.zoneId ? zoneById.get(room.zoneId) : undefined;
+    const dimmed = !!highlightZoneId && room.zoneId !== highlightZoneId;
+
     ctx.beginPath();
     ctx.moveTo(screenPoly[0].x, screenPoly[0].y);
     for (let i = 1; i < screenPoly.length; i++) ctx.lineTo(screenPoly[i].x, screenPoly[i].y);
-    ctx.closePath(); ctx.fill();
+    ctx.closePath();
 
-    drawRoomFloorPattern(cs, room, screenPoly);
+    if (dimmed) {
+      ctx.fillStyle = 'rgba(152, 162, 173, 0.12)';
+      ctx.fill();
+    } else if (zone) {
+      ctx.fillStyle = getZoneFill(zone);
+      ctx.fill();
+      // Second channel: survives a mono photocopy and separates near hues
+      const hatch = zoneHatch(ctx, zone.color, zone.pattern, zoom);
+      if (hatch) { ctx.fillStyle = hatch; ctx.fill(); }
+    } else {
+      ctx.fillStyle = getRoomFill(room, ri);
+      ctx.fill();
+    }
+
+    if (!zone && !dimmed) drawRoomFloorPattern(cs, room, screenPoly);
 
     const isSelected = currentSelectedRoomId === room.id;
     if (isSelected) {
@@ -1510,14 +1821,21 @@ export function drawRooms(
     }
 
     if (showDimensions && dimSettings.showInternalDimensions && poly.length >= 3) {
+      // "Internal" means inside the walls, so measure the clear polygon rather
+      // than the centerline one — otherwise this label reports half a wall's
+      // thickness of space that isn't there on each side. `poly` is already in
+      // hand, so inset it directly instead of paying for getRoomPolygon twice.
+      const ids = new Set(room.walls);
+      const clear = insetPolygonByWalls(poly, floor.walls.filter(w => ids.has(w.id)));
+      const src = clear.length >= 3 ? clear : poly;
       let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-      for (const pt of poly) { if (pt.x < minX) minX = pt.x; if (pt.x > maxX) maxX = pt.x; if (pt.y < minY) minY = pt.y; if (pt.y > maxY) maxY = pt.y; }
-      const roomW = (maxX - minX) / 100;
-      const roomD = (maxY - minY) / 100;
-      if (roomW > 0.1 && roomD > 0.1) {
+      for (const pt of src) { if (pt.x < minX) minX = pt.x; if (pt.x > maxX) maxX = pt.x; if (pt.y < minY) minY = pt.y; if (pt.y > maxY) maxY = pt.y; }
+      const roomW = maxX - minX;
+      const roomD = maxY - minY;
+      if (roomW > 10 && roomD > 10) {
         const dimFontSize = Math.max(9, 10 * zoom);
         ctx.fillStyle = '#b0b8c4'; ctx.font = `${dimFontSize}px sans-serif`;
-        ctx.fillText(`${formatLength(roomW * 100, dimSettings.units)} × ${formatLength(roomD * 100, dimSettings.units)}`, sc.x, sc.y + fontSize + 2);
+        ctx.fillText(`${formatLength(roomW, dimSettings.units)} × ${formatLength(roomD, dimSettings.units)}`, sc.x, sc.y + fontSize + 2);
       }
     }
   }

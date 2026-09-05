@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { selectedTool, placingFurnitureId, placingDoorType, placingWindowType, placingStair, addStair, placingColumn, placingColumnShape, activeFloor, setBackgroundImage, canvasCamX, canvasCamY, placingEntourageId, addCustomEntourage } from '$lib/stores/project';
+  import ZonePanel from './ZonePanel.svelte';
+  import { selectedTool, placingFurnitureId, placingDoorType, placingWindowType, placingStair, addStair, placingLift, placingRamp, placingColumn, placingColumnShape, activeFloor, setBackgroundImage, canvasCamX, canvasCamY, placingEntourageId, addCustomEntourage } from '$lib/stores/project';
   import type { Tool } from '$lib/stores/project';
   import type { Door, Window as Win, CustomEntourageDef } from '$lib/models/types';
   import { entourageCatalog, entourageCategories } from '$lib/utils/entourageCatalog';
@@ -153,6 +154,10 @@
 
   let isPlacingStair = $state(false);
   placingStair.subscribe(v => { isPlacingStair = v; });
+  let isPlacingLift = $state(false);
+  placingLift.subscribe(v => { isPlacingLift = v; });
+  let isPlacingRamp = $state(false);
+  placingRamp.subscribe(v => { isPlacingRamp = v; });
 
   // Entourage (2D presentation symbols)
   let placingEntId = $state<string | null>(null);
@@ -191,6 +196,24 @@
 
   function onPlaceStair() {
     placingStair.set(true);
+    placingLift.set(false);
+    placingRamp.set(false);
+    selectedTool.set('select');
+    placingFurnitureId.set(null);
+  }
+
+  function onPlaceLift() {
+    placingLift.set(true);
+    placingStair.set(false);
+    placingRamp.set(false);
+    selectedTool.set('select');
+    placingFurnitureId.set(null);
+  }
+
+  function onPlaceRamp() {
+    placingRamp.set(true);
+    placingStair.set(false);
+    placingLift.set(false);
     selectedTool.set('select');
     placingFurnitureId.set(null);
   }
@@ -390,6 +413,32 @@
           </div>
         </button>
 
+        <button
+          class="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors {isPlacingLift ? 'bg-blue-50 text-slate-800 ring-1 ring-blue-200' : 'hover:bg-gray-50 text-gray-700'}"
+          onclick={onPlaceLift}
+        >
+          <div class="w-9 h-9 rounded-lg bg-gray-100 flex items-center justify-center {isPlacingLift ? 'bg-blue-100' : ''}">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="16" height="18" rx="1"/><path d="M9 9l1.5-2L12 9"/><path d="M15 15l-1.5 2L12 15"/></svg>
+          </div>
+          <div class="text-left">
+            <div class="font-medium">Add Lift</div>
+            <div class="text-xs text-gray-400">Shaft with an accessible cabin</div>
+          </div>
+        </button>
+
+        <button
+          class="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors {isPlacingRamp ? 'bg-blue-50 text-slate-800 ring-1 ring-blue-200' : 'hover:bg-gray-50 text-gray-700'}"
+          onclick={onPlaceRamp}
+        >
+          <div class="w-9 h-9 rounded-lg bg-gray-100 flex items-center justify-center {isPlacingRamp ? 'bg-blue-100' : ''}">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 20h18"/><path d="M4 20L20 7"/><path d="M20 7v13"/></svg>
+          </div>
+          <div class="text-left">
+            <div class="font-medium">Add Ramp</div>
+            <div class="text-xs text-gray-400">Slope checked against the norms</div>
+          </div>
+        </button>
+
         <div class="flex gap-2">
           <button
             class="flex-1 flex items-center gap-2 px-3 py-2.5 rounded-lg text-sm transition-colors {isPlacingColumn ? 'bg-blue-50 text-slate-800 ring-1 ring-blue-200' : 'hover:bg-gray-50 text-gray-700'}"
@@ -413,6 +462,11 @@
               <div class="font-medium text-xs">Square Column</div>
             </div>
           </button>
+        </div>
+
+        <h3 class="text-xs font-semibold text-gray-400 uppercase mb-2 mt-3">Services</h3>
+        <div class="-mx-3 mb-3 border-y border-gray-100">
+          <ZonePanel />
         </div>
 
         <h3 class="text-xs font-semibold text-gray-400 uppercase mb-2 mt-3">Annotate</h3>

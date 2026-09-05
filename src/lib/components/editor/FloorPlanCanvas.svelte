@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { activeFloor, selectedTool, selectedElementId, selectedElementIds, selectedRoomId, addWall, addDoor, addWindow, updateWall, moveWallEndpoint, updateDoor, updateWindow, addFurniture, moveFurniture, commitFurnitureMove, rotateFurniture, setFurnitureRotation, scaleFurniture, removeElement, placingFurnitureId, placingRotation, placingDoorType, placingWindowType, detectedRoomsStore, duplicateDoor, duplicateWindow, duplicateFurniture, duplicateWall, moveWallParallel, splitWall, snapEnabled, placingStair, addStair, moveStair, updateStair, placingColumn, placingColumnShape, addColumn, moveColumn, updateColumn, calibrationMode, calibrationPoints, updateBackgroundImage, setBackgroundImage, canvasZoom, canvasCamX, canvasCamY, panMode, showFurnitureStore, addGuide, moveGuide, removeGuide, beginUndoGroup, endUndoGroup, layerVisibility, updateRoom, addMeasurement, removeMeasurement, addAnnotation, removeAnnotation, updateAnnotation, addTextAnnotation, removeTextAnnotation, updateTextAnnotation, moveTextAnnotation, toggleFurnitureLock, createGroup, ungroupElements, findGroupForElement, placingEntourageId, addEntourageItem, moveEntourage, resizeEntourage, currentProject, elevationWallId, elevationPickMode } from '$lib/stores/project';
+  import { activeFloor, selectedTool, selectedElementId, selectedElementIds, selectedRoomId, addWall, addDoor, addWindow, updateWall, moveWallEndpoint, updateDoor, updateWindow, addFurniture, moveFurniture, commitFurnitureMove, rotateFurniture, setFurnitureRotation, scaleFurniture, removeElement, placingFurnitureId, placingRotation, placingDoorType, placingWindowType, detectedRoomsStore, duplicateDoor, duplicateWindow, duplicateFurniture, duplicateWall, moveWallParallel, splitWall, snapEnabled, placingStair, addStair, moveStair, updateStair, placingLift, addLift, moveLift, placingRamp, addRamp, moveRamp, highlightZoneId, placingColumn, placingColumnShape, addColumn, moveColumn, updateColumn, calibrationMode, calibrationPoints, updateBackgroundImage, setBackgroundImage, canvasZoom, canvasCamX, canvasCamY, panMode, showFurnitureStore, addGuide, moveGuide, removeGuide, beginUndoGroup, endUndoGroup, layerVisibility, updateRoom, addMeasurement, removeMeasurement, addAnnotation, removeAnnotation, updateAnnotation, addTextAnnotation, removeTextAnnotation, updateTextAnnotation, moveTextAnnotation, toggleFurnitureLock, createGroup, ungroupElements, findGroupForElement, placingEntourageId, addEntourageItem, moveEntourage, resizeEntourage, currentProject, elevationWallId, elevationPickMode } from '$lib/stores/project';
   import type { Point, Wall, Door, Window as Win, FurnitureItem, Stair, Column, GuideLine, Measurement, Annotation, TextAnnotation, CustomEntourageDef } from '$lib/models/types';
   import type { Floor, Room } from '$lib/models/types';
   import { detectRooms, getRoomPolygon, roomCentroid } from '$lib/utils/roomDetection';
@@ -14,9 +14,9 @@
   import { projectSettings, formatLength, formatArea } from '$lib/stores/settings';
   import type { ProjectSettings } from '$lib/stores/settings';
   import type { CanvasState } from '$lib/utils/canvasInteraction';
-  import { drawWall as _drawWall, drawDoorOnWall as _drawDoorOnWall, drawWindowOnWall as _drawWindowOnWall, drawDoorDistanceDimensions as _drawDoorDistanceDimensions, drawWindowDistanceDimensions as _drawWindowDistanceDimensions, drawFurnitureItem, drawStair as _drawStair, drawColumn as _drawColumn, drawGuides as _drawGuides, drawPersistedMeasurements as _drawPersistedMeasurements, drawTextAnnotations as _drawTextAnnotations, drawAnnotation as _drawAnnotation, drawAnnotations as _drawAnnotations, drawRooms as _drawRooms, drawWallJoints as _drawWallJoints, drawSnapPoints as _drawSnapPoints, drawMinimap as _drawMinimap, drawEntourageItems as _drawEntourageItems, drawEntourageGhost as _drawEntourageGhost, entourageAspect } from '$lib/utils/canvasRenderer';
+  import { drawWall as _drawWall, drawDoorOnWall as _drawDoorOnWall, drawWindowOnWall as _drawWindowOnWall, drawDoorDistanceDimensions as _drawDoorDistanceDimensions, drawWindowDistanceDimensions as _drawWindowDistanceDimensions, drawFurnitureItem, drawStair as _drawStair, drawLift as _drawLift, drawRamp as _drawRamp, drawColumn as _drawColumn, drawGuides as _drawGuides, drawPersistedMeasurements as _drawPersistedMeasurements, drawTextAnnotations as _drawTextAnnotations, drawAnnotation as _drawAnnotation, drawAnnotations as _drawAnnotations, drawRooms as _drawRooms, drawWallJoints as _drawWallJoints, drawSnapPoints as _drawSnapPoints, drawMinimap as _drawMinimap, drawEntourageItems as _drawEntourageItems, drawEntourageGhost as _drawEntourageGhost, entourageAspect } from '$lib/utils/canvasRenderer';
   import { getEntourageDef } from '$lib/utils/entourageCatalog';
-  import { pointInPolygon, positionOnWall, findWallAt as _findWallAt, findHandleAt as _findHandleAt, findFurnitureAt as _findFurnitureAt, findColumnAt as _findColumnAt, findStairAt as _findStairAt, findDoorAt as _findDoorAt, findWindowAt as _findWindowAt, findRoomAt as _findRoomAt, hitTestMeasurement as _hitTestMeasurement, hitTestAnnotation as _hitTestAnnotation, hitTestTextAnnotation as _hitTestTextAnnotation, findEntourageAt } from '$lib/utils/hitTesting';
+  import { pointInPolygon, positionOnWall, findWallAt as _findWallAt, findHandleAt as _findHandleAt, findFurnitureAt as _findFurnitureAt, findColumnAt as _findColumnAt, findStairAt as _findStairAt, findLiftAt as _findLiftAt, findRampAt as _findRampAt, findDoorAt as _findDoorAt, findWindowAt as _findWindowAt, findRoomAt as _findRoomAt, hitTestMeasurement as _hitTestMeasurement, hitTestAnnotation as _hitTestAnnotation, hitTestTextAnnotation as _hitTestTextAnnotation, findEntourageAt } from '$lib/utils/hitTesting';
 
   let canvas: HTMLCanvasElement;
   let ctx: CanvasRenderingContext2D;
@@ -147,6 +147,14 @@
   let currentGridSize: number = $state(25);
   let isPlacingStair: boolean = $state(false);
   let draggingStairId: string | null = $state(null);
+  let isPlacingLift: boolean = $state(false);
+  let draggingLiftId: string | null = $state(null);
+  let liftDragOffset: Point = { x: 0, y: 0 };
+  let isPlacingRamp: boolean = $state(false);
+  let draggingRampId: string | null = $state(null);
+  let rampDragOffset: Point = { x: 0, y: 0 };
+  let activeHighlightZone: string | null = $state(null);
+  let projectZones: import('$lib/models/types').Zone[] = $state([]);
   let stairDragOffset: Point = { x: 0, y: 0 };
   let isPlacingColumn: boolean = $state(false);
   let placingColShape: 'round' | 'square' = $state('round');
@@ -178,8 +186,22 @@
   let handleOrigScale: { x: number; y: number } = { x: 1, y: 1 };
   let handleOrigRotation: number = 0;
 
-  // Wall parallel drag state (drag midpoint to move wall parallel)
+  // Wall parallel drag state (drag the wall body, or its midpoint handle, to move it)
   let draggingWallParallel: { wallId: string; startMousePos: Point; origStart: Point; origEnd: Point; origCurve?: Point; connectedStart: { wallId: string; endpoint: 'start' | 'end' }[]; connectedEnd: { wallId: string; endpoint: 'start' | 'end' }[] } | null = $state(null);
+  /** Pixels the pointer must travel before a press on a wall becomes a drag. */
+  const WALL_DRAG_THRESHOLD_PX = 4;
+  let wallDragArmed = false;
+  /** Wall currently under the pointer — drives the move cursor. */
+  let hoveredWallId: string | null = $state(null);
+
+  /** True while any pointer-driven interaction is in progress. */
+  function isDraggingAnything(): boolean {
+    return !!(wallStart || draggingFurnitureId || draggingDoorId || draggingWindowId || draggingStairId || draggingLiftId || draggingRampId ||
+      draggingColumnId || draggingWallEndpoint || draggingWallParallel || draggingCurveHandle ||
+      draggingHandle || draggingMultiSelect || draggingRoomId || draggingRoomLabelId ||
+      draggingTextAnnotationId || draggingGuideId || measuring || annotating ||
+      marqueeStart || isPanning || draggingEntourageId || resizingEntourageId);
+  }
 
   // Curve handle drag state
   let draggingCurveHandle: string | null = $state(null); // wallId being curved
@@ -821,7 +843,7 @@
 
   function drawRooms() {
     if (!currentFloor) return;
-    _drawRooms(getCS(), currentFloor, detectedRooms, currentSelectedRoomId, showRoomLabels, showDimensions, dimSettings);
+    _drawRooms(getCS(), currentFloor, detectedRooms, currentSelectedRoomId, showRoomLabels, showDimensions, dimSettings, projectZones, activeHighlightZone);
   }
 
   function drawAngleGuides(start: Point) {
@@ -878,6 +900,18 @@
   function drawGuides() {
     if (!currentFloor) return;
     _drawGuides(getCS(), currentFloor, selectedGuideId, RULER_SIZE);
+  }
+
+  function drawLift(lift: import('$lib/models/types').Lift, selected: boolean) {
+    _drawLift(getCS(), lift, selected);
+  }
+
+  function drawRamp(ramp: import('$lib/models/types').Ramp, selected: boolean) {
+    // Colour the ramp red when it breaks the project's slope limit, so the
+    // problem is visible on the plan rather than only in a report
+    const limit = $currentProject?.norms?.maxRampSlopePercent ?? 8;
+    const over = ramp.runLength > 0 && (ramp.rise / ramp.runLength) * 100 > limit;
+    _drawRamp(getCS(), ramp, selected, over);
   }
 
   function drawStair(stair: Stair, selected: boolean) {
@@ -1118,11 +1152,11 @@
     const floor = currentFloor;
     if (!floor) { requestAnimationFrame(draw); return; }
     // Mark dirty whenever active interactions are happening (wall drawing, dragging, etc.)
-    if (wallStart || draggingFurnitureId || draggingDoorId || draggingWindowId || draggingStairId ||
+    if (wallStart || draggingFurnitureId || draggingDoorId || draggingWindowId || draggingStairId || draggingLiftId || draggingRampId ||
         draggingColumnId || draggingWallEndpoint || draggingWallParallel || draggingCurveHandle ||
         draggingHandle || draggingMultiSelect || draggingRoomId || draggingRoomLabelId ||
         draggingTextAnnotationId || draggingGuideId || measuring || annotating ||
-        currentPlacingId || isPlacingStair || isPlacingColumn || marqueeStart || isPanning ||
+        currentPlacingId || isPlacingStair || isPlacingLift || isPlacingRamp || isPlacingColumn || marqueeStart || isPanning ||
         draggingEntourageId || resizingEntourageId || currentEntourageDefId) {
       canvasDirty = true;
     }
@@ -1415,6 +1449,14 @@
       }
     }
 
+    // Lifts and ramps share the stairs layer — they are all vertical circulation
+    if (showStairs && floor.lifts) {
+      for (const lift of floor.lifts) drawLift(lift, isSelected(lift.id));
+    }
+    if (showStairs && floor.ramps) {
+      for (const ramp of floor.ramps) drawRamp(ramp, isSelected(ramp.id));
+    }
+
     // Columns
     if (layerVis.columns && floor.columns) {
       for (const col of floor.columns) {
@@ -1437,6 +1479,20 @@
       ctx.globalAlpha = 0.5;
       const preview: Stair = { id: 'preview', position: mousePos, rotation: 0, width: 100, depth: 300, riserCount: 14, direction: 'up', stairType: 'straight' };
       drawStair(preview, false);
+      ctx.restore();
+    }
+
+    if (isPlacingLift) {
+      ctx.save(); ctx.globalAlpha = 0.5;
+      drawLift({ id: 'preview', position: mousePos, rotation: 0, width: 160, depth: 180,
+        cabinWidth: 110, cabinDepth: 140, doorSide: 'front', doorWidth: 90, kind: 'accessible' }, false);
+      ctx.restore();
+    }
+
+    if (isPlacingRamp) {
+      ctx.save(); ctx.globalAlpha = 0.5;
+      drawRamp({ id: 'preview', position: mousePos, rotation: 0, width: 150,
+        runLength: 190, rise: 15, direction: 'up', topLanding: 150, bottomLanding: 150 }, false);
       ctx.restore();
     }
 
@@ -1782,6 +1838,10 @@
     const unsub10 = snapEnabled.subscribe((v) => { currentSnapEnabled = v; markDirty(); });
     const unsub_snapgrid = projectSettings.subscribe((s) => { currentSnapToGrid = s.snapToGrid; currentGridSize = s.gridSize; markDirty(); });
     const unsub11 = placingStair.subscribe((v) => { isPlacingStair = v; markDirty(); });
+    const unsubLift = placingLift.subscribe((v) => { isPlacingLift = v; markDirty(); });
+    const unsubRamp = placingRamp.subscribe((v) => { isPlacingRamp = v; markDirty(); });
+    const unsubHl = highlightZoneId.subscribe((v) => { activeHighlightZone = v; markDirty(); });
+    const unsubZones = currentProject.subscribe((p) => { projectZones = p?.zones ?? []; markDirty(); });
     const unsubEnt1 = placingEntourageId.subscribe((id) => { currentEntourageDefId = id; markDirty(); });
     const unsubEnt2 = currentProject.subscribe((pr) => { customEntourageDefs = pr?.customEntourage; markDirty(); });
     const unsub_layers = layerVisibility.subscribe((v) => { layerVis = v; markDirty(); });
@@ -1963,6 +2023,16 @@
     return _findColumnAt(p, currentFloor.columns);
   }
 
+  function findLiftAt(p: Point) {
+    if (!currentFloor) return null;
+    return _findLiftAt(p, currentFloor.lifts);
+  }
+
+  function findRampAt(p: Point) {
+    if (!currentFloor) return null;
+    return _findRampAt(p, currentFloor.ramps);
+  }
+
   function findStairAt(p: Point): Stair | null {
     if (!currentFloor) return null;
     return _findStairAt(p, currentFloor.stairs);
@@ -2113,6 +2183,20 @@
       const id = addStair(pos);
       selectedElementId.set(id);
       placingStair.set(false);
+      return;
+    }
+
+    if (isPlacingLift) {
+      const id = addLift({ x: snap(wp.x), y: snap(wp.y) });
+      selectedElementId.set(id);
+      placingLift.set(false);
+      return;
+    }
+
+    if (isPlacingRamp) {
+      const id = addRamp({ x: snap(wp.x), y: snap(wp.y) });
+      selectedElementId.set(id);
+      placingRamp.set(false);
       return;
     }
 
@@ -2286,6 +2370,7 @@
                 connectedStart: findConnectedEndpoints(selWall.start, selWall.id),
                 connectedEnd: findConnectedEndpoints(selWall.end, selWall.id),
               };
+              wallDragArmed = true; // grabbing the handle is already deliberate
             } else {
               // For curved walls, midpoint handle still curves
               draggingCurveHandle = selWall.id;
@@ -2372,6 +2457,28 @@
           return;
         }
       }
+      const lift = findLiftAt(wp);
+      if (lift) {
+        selectElement(lift.id, e.shiftKey);
+        if (!e.shiftKey) {
+          draggingLiftId = lift.id;
+          liftDragOffset = { x: wp.x - lift.position.x, y: wp.y - lift.position.y };
+          commitFurnitureMove();
+        }
+        return;
+      }
+
+      const ramp = findRampAt(wp);
+      if (ramp) {
+        selectElement(ramp.id, e.shiftKey);
+        if (!e.shiftKey) {
+          draggingRampId = ramp.id;
+          rampDragOffset = { x: wp.x - ramp.position.x, y: wp.y - ramp.position.y };
+          commitFurnitureMove();
+        }
+        return;
+      }
+
       // Check stairs
       const stair = findStairAt(wp);
       if (stair) {
@@ -2410,6 +2517,20 @@
       const wall = findWallAt(wp);
       if (wall) {
         selectElement(wall.id, e.shiftKey);
+        // Grabbing the wall body drags it, the same way furniture, stairs and
+        // columns behave. Previously the only draggable spot was the 10 px
+        // midpoint handle, which the context toolbar usually sits on top of.
+        if (!e.shiftKey && !wall.curvePoint) {
+          draggingWallParallel = {
+            wallId: wall.id,
+            startMousePos: { ...wp },
+            origStart: { ...wall.start },
+            origEnd: { ...wall.end },
+            connectedStart: findConnectedEndpoints(wall.start, wall.id),
+            connectedEnd: findConnectedEndpoints(wall.end, wall.id),
+          };
+          wallDragArmed = false; // snapshot is taken once the drag arms
+        }
       } else {
         // Check if clicking on a room label (for dragging)
         const labelRoom = findRoomLabelAt(wp);
@@ -2586,11 +2707,33 @@
         moveWallEndpoint(conn.wallId, conn.endpoint, pt);
       }
     }
+    // Hover feedback: walls are draggable, so signal that before the user clicks
+    if (currentTool === 'select' && !isDraggingAnything()) {
+      const hovered = findWallAt(mousePos);
+      const nextHover = hovered ? hovered.id : null;
+      if (nextHover !== hoveredWallId) { hoveredWallId = nextHover; markDirty(); }
+    } else if (hoveredWallId !== null) {
+      hoveredWallId = null;
+    }
+
     if (draggingWallParallel && currentFloor) {
       const wall = currentFloor.walls.find(w => w.id === draggingWallParallel!.wallId);
       if (wall) {
+        // Don't move anything until the pointer has clearly left the press
+        // point — otherwise simply clicking a wall to select it would shift it
+        // by a whole grid step.
+        if (!wallDragArmed) {
+          const moved = Math.hypot(
+            mousePos.x - draggingWallParallel.startMousePos.x,
+            mousePos.y - draggingWallParallel.startMousePos.y,
+          ) * zoom;
+          if (moved >= WALL_DRAG_THRESHOLD_PX) {
+            wallDragArmed = true;
+            commitFurnitureMove(); // snapshot the pre-drag state for undo
+          }
+        }
         // Free movement in all directions
-        {
+        if (wallDragArmed) {
           const mdx = mousePos.x - draggingWallParallel.startMousePos.x;
           const mdy = mousePos.y - draggingWallParallel.startMousePos.y;
           // Snap delta to grid
@@ -2728,6 +2871,14 @@
     if (draggingStairId && currentFloor?.stairs) {
       const basePos = { x: mousePos.x - stairDragOffset.x, y: mousePos.y - stairDragOffset.y };
       moveStair(draggingStairId, { x: snap(basePos.x), y: snap(basePos.y) });
+    }
+    if (draggingLiftId && currentFloor?.lifts) {
+      const b = { x: mousePos.x - liftDragOffset.x, y: mousePos.y - liftDragOffset.y };
+      moveLift(draggingLiftId, { x: snap(b.x), y: snap(b.y) });
+    }
+    if (draggingRampId && currentFloor?.ramps) {
+      const b = { x: mousePos.x - rampDragOffset.x, y: mousePos.y - rampDragOffset.y };
+      moveRamp(draggingRampId, { x: snap(b.x), y: snap(b.y) });
     }
     if (draggingEntourageId) {
       const basePos = { x: mousePos.x - dragOffset.x, y: mousePos.y - dragOffset.y };
@@ -2903,12 +3054,14 @@
 
     if (draggingFurnitureId) commitFurnitureMove();
     if (draggingHandle) commitFurnitureMove();
-    if (draggingWallEndpoint) commitFurnitureMove();
-    if (draggingWallParallel) commitFurnitureMove();
+    // No snapshot here: both wall drags snapshot their pre-drag state when the
+    // drag begins, so taking another one now would add an empty undo step.
     if (draggingCurveHandle) commitFurnitureMove();
     if (draggingMultiSelect) commitFurnitureMove();
     if (draggingRoomId) commitFurnitureMove();
     if (draggingStairId) commitFurnitureMove();
+    if (draggingLiftId) commitFurnitureMove();
+    if (draggingRampId) commitFurnitureMove();
     if (draggingColumnId) commitFurnitureMove();
     if (draggingTextAnnotationId) commitFurnitureMove();
     draggingTextAnnotationId = null;
@@ -2916,11 +3069,14 @@
     roomDragStartPositions.clear();
     draggingMultiSelect = null;
     draggingWallParallel = null;
+    wallDragArmed = false;
     draggingCurveHandle = null;
     draggingFurnitureId = null;
     draggingEntourageId = null;
     resizingEntourageId = null;
     draggingStairId = null;
+    draggingLiftId = null;
+    draggingRampId = null;
     draggingColumnId = null;
     draggingDoorId = null;
     draggingWindowId = null;
@@ -3693,6 +3849,8 @@
     (draggingHandle === 'resize-l' || draggingHandle === 'resize-r') ? 'ew-resize' :
     draggingHandle?.startsWith('resize') ? 'nwse-resize' :
     currentTool === 'text' ? 'text' :
+    // Show a move cursor over walls so it's discoverable that they can be dragged
+    (currentTool === 'select' && hoveredWallId) ? 'move' :
     currentTool === 'select' ? 'default' :
     currentTool === 'furniture' ? 'copy' :
     (currentTool === 'door' || currentTool === 'window') ? (placementPreview ? 'crosshair' : 'not-allowed') :

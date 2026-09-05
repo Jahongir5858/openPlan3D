@@ -31,10 +31,11 @@ export type ZonePattern = 'none' | 'diag-l' | 'diag-r' | 'dots' | 'grid' | 'cros
  */
 export interface Zone {
   id: string;
-  code: string;
-  name: string;
-  color: string;
+  code: string;        // "03"
+  name: string;        // "Kunduzgi parvarish xizmati"
+  color: string;       // hex
   pattern?: ZonePattern;
+  /** Floor area per client in m², used for capacity and undersize checks */
   areaPerClient?: number;
 }
 
@@ -43,29 +44,33 @@ export interface Room {
   name: string;
   walls: string[];
   floorTexture: string;
+  /** Which service this room belongs to */
   zoneId?: string;
+  /** Clear (net) floor area in m² — centerline polygon inset by half of each surrounding wall */
   area: number;
+  /** Gross (axis-to-axis) area in m², measured on the wall centerlines */
   grossArea?: number;
   color?: string;
   roomType?: RoomCategory;
+  /** Custom label position offset from centroid (in world units) */
   labelOffset?: Point;
 }
 
 export interface Door {
   id: string;
   wallId: string;
-  position: number;
+  position: number; // 0-1 along wall
   width: number;
   height: number;
   type: 'single' | 'double' | 'sliding' | 'french' | 'pocket' | 'bifold' | 'opening' | 'garage';
   swingDirection: 'left' | 'right';
-  flipSide: boolean;
+  flipSide: boolean; // flip which side of wall the door opens to (vertical flip)
 }
 
 export interface Window {
   id: string;
   wallId: string;
-  position: number;
+  position: number; // 0-1 along wall
   width: number;
   height: number;
   sillHeight: number;
@@ -78,19 +83,32 @@ export interface FurnitureItem {
   position: Point;
   rotation: number;
   scale: { x: number; y: number; z: number };
+  // Per-item overrides (optional — falls back to catalog defaults)
   color?: string;
-  width?: number;
-  depth?: number;
-  height?: number;
-  material?: string;
+  width?: number;   // cm
+  depth?: number;   // cm
+  height?: number;  // cm
+  material?: string; // material name/id
   locked?: boolean;
 }
 
-export interface ElementGroup { id: string; elementIds: string[]; }
+export interface ElementGroup {
+  id: string;
+  elementIds: string[];
+}
+
 export type StairType = 'straight' | 'l-shaped' | 'u-shaped' | 'spiral';
 
+/**
+ * Vertical circulation — stairs, lifts and ramps — connects floors, so each
+ * element records the range of levels it passes through. A plan then knows on
+ * its own whether to show "up", "down" or both, and the same shaft can't drift
+ * out of alignment between storeys.
+ */
 export interface VerticalSpan {
+  /** Lowest floor level the element reaches. Defaults to the floor it sits on. */
   fromLevel?: number;
+  /** Highest floor level the element reaches. */
   toLevel?: number;
 }
 
@@ -98,41 +116,55 @@ export interface Stair extends VerticalSpan {
   id: string;
   position: Point;
   rotation: number;
-  width: number;
-  depth: number;
-  riserCount: number;
+  width: number;   // default 100cm
+  depth: number;   // default 300cm
+  riserCount: number; // default 14
   direction: 'up' | 'down';
-  stairType: StairType;
+  stairType: StairType; // default 'straight'
+  /** Floor-to-floor rise in cm; riser height = rise / riserCount */
   rise?: number;
   handrail?: 'none' | 'left' | 'right' | 'both';
 }
 
 export type LiftKind = 'passenger' | 'accessible' | 'service' | 'stretcher';
+
 export interface Lift extends VerticalSpan {
   id: string;
-  position: Point;
+  position: Point;      // centre of the shaft
   rotation: number;
+  /** Shaft outer dimensions in cm */
   width: number;
   depth: number;
+  /** Clear cabin dimensions in cm — what the norm is actually checked against */
   cabinWidth: number;
   cabinDepth: number;
+  /** Which side of the shaft the doors open onto, in local coordinates */
   doorSide: 'front' | 'back' | 'left' | 'right';
-  doorWidth: number;
+  doorWidth: number;    // cm
   kind: LiftKind;
   label?: string;
 }
 
-export interface RampLanding { at: number; length: number; }
+export interface RampLanding {
+  /** Distance along the ramp run where the landing sits, in cm */
+  at: number;
+  length: number;       // cm
+}
+
 export interface Ramp extends VerticalSpan {
   id: string;
-  position: Point;
-  rotation: number;
-  width: number;
+  position: Point;      // centre of the run
+  rotation: number;     // 0 = rises toward -y
+  width: number;        // clear width in cm
+  /** Horizontal length of the sloped run, excluding landings, in cm */
   runLength: number;
+  /** Vertical rise in cm. Slope = rise / runLength */
   rise: number;
   handrail?: 'none' | 'left' | 'right' | 'both';
+  /** Level platforms at the top and bottom, in cm (0 = none) */
   topLanding?: number;
   bottomLanding?: number;
+  /** Intermediate landings breaking up a long run */
   landings?: RampLanding[];
   direction: 'up' | 'down';
 }
@@ -142,18 +174,72 @@ export interface Column {
   position: Point;
   rotation: number;
   shape: 'round' | 'square';
-  diameter: number;
-  height: number;
+  diameter: number;  // cm (for round) or side length (for square)
+  height: number;    // cm
   color: string;
 }
 
-export interface Measurement { id: string; x1: number; y1: number; x2: number; y2: number; }
-export interface Annotation { id: string; x1: number; y1: number; x2: number; y2: number; label?: string; offset: number; }
-export interface TextAnnotation { id: string; x: number; y: number; text: string; fontSize: number; color: string; rotation: number; }
-export interface GuideLine { id: string; orientation: 'horizontal' | 'vertical'; position: number; }
-export interface BackgroundImage { dataUrl: string; position: Point; scale: number; opacity: number; rotation: number; locked: boolean; }
-export interface EntourageItem { id: string; defId: string; position: Point; width: number; rotation: number; opacity?: number; locked?: boolean; }
-export interface CustomEntourageDef { id: string; name: string; dataUrl: string; aspect: number; }
+export interface Measurement {
+  id: string;
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+}
+
+export interface Annotation {
+  id: string;
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  label?: string;
+  offset: number; // perpendicular offset for dimension line (default 40)
+}
+
+export interface TextAnnotation {
+  id: string;
+  x: number;
+  y: number;
+  text: string;
+  fontSize: number;
+  color: string;
+  rotation: number;
+}
+
+export interface GuideLine {
+  id: string;
+  orientation: 'horizontal' | 'vertical';
+  position: number; // world coordinate (x for vertical, y for horizontal)
+}
+
+export interface BackgroundImage {
+  dataUrl: string;
+  position: Point;
+  scale: number;
+  opacity: number;
+  rotation: number;
+  locked: boolean;
+}
+
+/** A placed 2D entourage symbol (person, car, tree, …) for presentation plans */
+export interface EntourageItem {
+  id: string;
+  defId: string; // id of a built-in EntourageDef or a project CustomEntourageDef
+  position: Point; // center, world cm
+  width: number; // real-world width in cm
+  rotation: number; // degrees
+  opacity?: number; // 0–1, default 1
+  locked?: boolean;
+}
+
+/** User-uploaded PNG entourage symbol, stored on the project */
+export interface CustomEntourageDef {
+  id: string;
+  name: string;
+  dataUrl: string; // PNG as data URL
+  aspect: number; // height / width
+}
 
 export interface Floor {
   id: string;
@@ -186,19 +272,35 @@ export interface Project {
   createdAt: Date;
   updatedAt: Date;
   customEntourage?: CustomEntourageDef[];
+  /** Services delivered in this building */
   zones?: Zone[];
+  /** Accessibility limits this project is checked against. Editable, because
+   *  building codes change and shouldn't require a new app release. */
   norms?: AccessibilityNorms;
 }
 
+/**
+ * Accessibility limits, kept as project data rather than constants.
+ * Defaults follow widely used international practice; check them against the
+ * building code that applies to your project before relying on them.
+ */
 export interface AccessibilityNorms {
+  /** Clear door opening width, cm */
   minDoorClearWidth: number;
+  /** Clear corridor width, cm */
   minCorridorWidth: number;
+  /** Wheelchair turning circle diameter, cm */
   minTurningDiameter: number;
+  /** Maximum ramp slope as a percentage */
   maxRampSlopePercent: number;
+  /** Longest ramp run allowed before an intermediate landing, cm */
   maxRampRunWithoutLanding: number;
+  /** Minimum landing length, cm */
   minRampLanding: number;
+  /** Clear lift cabin dimensions, cm */
   minLiftCabinWidth: number;
   minLiftCabinDepth: number;
+  /** Stair geometry, cm */
   maxRiserHeight: number;
   minTreadDepth: number;
   minStairWidth: number;
