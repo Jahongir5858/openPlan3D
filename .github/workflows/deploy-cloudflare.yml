@@ -37,7 +37,7 @@ jobs:
           /** @type {import('@sveltejs/kit').Config} */
           const config = {
             kit: {
-              adapter: adapter({ fallback: '404.html' })
+              adapter: adapter({ fallback: 'index.html' })
             }
           };
 
