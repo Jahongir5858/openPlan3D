@@ -2,7 +2,7 @@
 	"name": "open3dfloorplan",
 	"private": true,
 	"version": "0.9.0",
-	"description": "Free open source 2D/3D floor plan editor — design in 2D, preview in 3D, all in your browser",
+	"description": "Free open source 2D/3D floor plan editor \u2014 design in 2D, preview in 3D, all in your browser",
 	"author": "theLodgeStudio",
 	"license": "MIT",
 	"repository": {
@@ -16,7 +16,9 @@
 		"preview": "vite preview",
 		"prepare": "svelte-kit sync || echo ''",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
-		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch"
+		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
+		"test": "vitest run",
+		"test:watch": "vitest"
 	},
 	"devDependencies": {
 		"@sveltejs/adapter-auto": "^7.0.0",
@@ -31,7 +33,8 @@
 		"tailwindcss": "^4.1.18",
 		"three": "^0.182.0",
 		"typescript": "^5.9.3",
-		"vite": "^7.3.1"
+		"vite": "^7.3.1",
+		"vitest": "^5.0.0"
 	},
 	"dependencies": {
 		"dxf-writer": "^1.18.4",
