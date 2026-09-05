@@ -2,46 +2,70 @@
  * Furniture Thumbnail Generator
  * Renders GLB models to small preview images using an offscreen Three.js renderer.
  * Cached as data URLs after first render.
+ *
+ * Three.js is pulled in with a dynamic import rather than a static one. This
+ * module is imported by BuildPanel, which is part of the 2D editor; a static
+ * `import * as THREE` here would put the whole ~390 KB (gzipped) Three.js chunk
+ * into the editor route's initial payload and quietly defeat the lazy-loading
+ * of ThreeViewer.
  */
-import * as THREE from 'three';
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import type * as ThreeNS from 'three';
+import type { GLTFLoader as GLTFLoaderCtor } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { base } from '$app/paths';
 
 const SIZE = 128;
 const cache = new Map<string, string>();
 const pending = new Map<string, Promise<string | null>>();
 
-let renderer: THREE.WebGLRenderer | null = null;
-let scene: THREE.Scene | null = null;
-let camera: THREE.OrthographicCamera | null = null;
+let THREE: typeof ThreeNS | null = null;
+let loader: GLTFLoaderCtor | null = null;
+let threeLoading: Promise<void> | null = null;
+
+/** Load Three.js and the GLTF loader on first use. Safe to call concurrently. */
+function ensureThree(): Promise<void> {
+  if (THREE && loader) return Promise.resolve();
+  if (!threeLoading) {
+    threeLoading = Promise.all([
+      import('three'),
+      import('three/examples/jsm/loaders/GLTFLoader.js'),
+    ]).then(([three, gltf]) => {
+      THREE = three;
+      loader = new gltf.GLTFLoader();
+    });
+  }
+  return threeLoading;
+}
+
+let renderer: ThreeNS.WebGLRenderer | null = null;
+let scene: ThreeNS.Scene | null = null;
+let camera: ThreeNS.OrthographicCamera | null = null;
 
 function ensureRenderer() {
   if (renderer) return;
-  renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true, preserveDrawingBuffer: true });
+  const T = THREE!;
+  renderer = new T.WebGLRenderer({ alpha: true, antialias: true, preserveDrawingBuffer: true });
   renderer.setSize(SIZE, SIZE);
   renderer.setPixelRatio(1);
   renderer.setClearColor(0x000000, 0);
 
-  scene = new THREE.Scene();
+  scene = new T.Scene();
 
   // Lighting
-  const ambient = new THREE.AmbientLight(0xffffff, 0.8);
+  const ambient = new T.AmbientLight(0xffffff, 0.8);
   scene.add(ambient);
-  const dir = new THREE.DirectionalLight(0xffffff, 1.2);
+  const dir = new T.DirectionalLight(0xffffff, 1.2);
   dir.position.set(2, 4, 3);
   scene.add(dir);
-  const fill = new THREE.DirectionalLight(0xffffff, 0.4);
+  const fill = new T.DirectionalLight(0xffffff, 0.4);
   fill.position.set(-2, 1, -1);
   scene.add(fill);
 
-  camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.01, 100);
+  camera = new T.OrthographicCamera(-1, 1, 1, -1, 0.01, 100);
 }
 
-const loader = new GLTFLoader();
-
-function loadModel(file: string): Promise<THREE.Group> {
+function loadModel(file: string): Promise<ThreeNS.Group> {
   return new Promise((resolve, reject) => {
-    loader.load(
+    loader!.load(
       `${base}/models/${file}.glb`,
       (gltf) => resolve(gltf.scene),
       undefined,
@@ -60,20 +84,22 @@ export async function generateThumbnail(file: string): Promise<string | null> {
 
   const promise = (async () => {
     try {
+      await ensureThree();
+      const T = THREE!;
       ensureRenderer();
       const model = await loadModel(file);
 
       // Clear scene of previous models (keep lights)
-      const toRemove: THREE.Object3D[] = [];
-      scene!.children.forEach(c => { if (!(c instanceof THREE.Light)) toRemove.push(c); });
+      const toRemove: ThreeNS.Object3D[] = [];
+      scene!.children.forEach(c => { if (!(c instanceof T.Light)) toRemove.push(c); });
       toRemove.forEach(c => scene!.remove(c));
 
       scene!.add(model);
 
       // Fit camera to model
-      const box = new THREE.Box3().setFromObject(model);
-      const size = new THREE.Vector3();
-      const center = new THREE.Vector3();
+      const box = new T.Box3().setFromObject(model);
+      const size = new T.Vector3();
+      const center = new T.Vector3();
       box.getSize(size);
       box.getCenter(center);
 

@@ -3,7 +3,7 @@
  * All functions are pure — they take data and return results.
  * Extracted from FloorPlanCanvas.svelte.
  */
-import type { Point, Wall, Door, Window as Win, FurnitureItem, Stair, Column, Floor, Measurement, Annotation, TextAnnotation, EntourageItem } from '$lib/models/types';
+import type { Point, Wall, Door, Window as Win, FurnitureItem, Stair, Lift, Ramp, Column, Floor, Measurement, Annotation, TextAnnotation, EntourageItem } from '$lib/models/types';
 import type { Room } from '$lib/models/types';
 import { getCatalogItem } from '$lib/utils/furnitureCatalog';
 import { getRoomPolygon } from '$lib/utils/roomDetection';
@@ -267,6 +267,37 @@ export function findEntourageAt(
     const lx = dx * Math.cos(a) - dy * Math.sin(a);
     const ly = dx * Math.sin(a) + dy * Math.cos(a);
     if (Math.abs(lx) <= w / 2 && Math.abs(ly) <= h / 2) return it;
+  }
+  return null;
+}
+
+export function findLiftAt(p: Point, lifts: Lift[] | undefined): Lift | null {
+  if (!lifts) return null;
+  for (const lift of [...lifts].reverse()) {
+    const dx = p.x - lift.position.x;
+    const dy = p.y - lift.position.y;
+    const angle = -(lift.rotation * Math.PI) / 180;
+    const rx = dx * Math.cos(angle) - dy * Math.sin(angle);
+    const ry = dx * Math.sin(angle) + dy * Math.cos(angle);
+    if (Math.abs(rx) < lift.width / 2 && Math.abs(ry) < lift.depth / 2) return lift;
+  }
+  return null;
+}
+
+/** Total footprint of a ramp, landings included. */
+export function rampTotalLength(ramp: Ramp): number {
+  return (ramp.bottomLanding ?? 0) + ramp.runLength + (ramp.topLanding ?? 0);
+}
+
+export function findRampAt(p: Point, ramps: Ramp[] | undefined): Ramp | null {
+  if (!ramps) return null;
+  for (const ramp of [...ramps].reverse()) {
+    const dx = p.x - ramp.position.x;
+    const dy = p.y - ramp.position.y;
+    const angle = -(ramp.rotation * Math.PI) / 180;
+    const rx = dx * Math.cos(angle) - dy * Math.sin(angle);
+    const ry = dx * Math.sin(angle) + dy * Math.cos(angle);
+    if (Math.abs(rx) < ramp.width / 2 && Math.abs(ry) < rampTotalLength(ramp) / 2) return ramp;
   }
   return null;
 }
