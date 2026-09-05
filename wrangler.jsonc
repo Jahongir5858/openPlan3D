@@ -1,0 +1,18 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "openplan3d-uz",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-09-04",
+  "assets": {
+    "directory": "./build",
+    "binding": "ASSETS",
+    "run_worker_first": ["/api/*"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "openplan3d-db",
+      "database_id": "REPLACED_BY_DEPLOY_WORKFLOW"
+    }
+  ]
+}
