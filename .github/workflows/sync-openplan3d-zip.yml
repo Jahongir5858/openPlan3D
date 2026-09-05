@@ -38,18 +38,39 @@ jobs:
       - name: Type and Svelte checks
         run: npm run check
 
-      - name: Tests
-        run: npm test
+      - name: Tests with diagnostics
+        id: tests
+        shell: bash
+        run: |
+          set +e
+          npm test 2>&1 | tee test-output.log
+          code=${PIPESTATUS[0]}
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Upload test diagnostics
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-output
+          path: test-output.log
 
       - name: Build
         run: npm run build
 
+      - name: Fail if tests failed
+        if: steps.tests.outputs.exit_code != '0'
+        run: |
+          echo "Tests failed; see test-output artifact."
+          exit 1
+
       - name: Commit synced ZIP
+        if: steps.tests.outputs.exit_code == '0'
         shell: bash
         run: |
           set -euo pipefail
           rm -rf .sync
           rm -f .github/workflows/sync-openplan3d-zip.yml
+          rm -f test-output.log
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
