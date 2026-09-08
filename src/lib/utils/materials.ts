@@ -10,7 +10,10 @@ import * as THREE from 'three';
  * 1) neutralise positive polygon offsets used by wall interior materials;
  * 2) give the dark-brown door-frame material a small negative depth bias;
  * 3) give every wall its own stable, tiny depth tier while rendering, so two
- *    different wall volumes never compete at exactly the same depth at corners.
+ *    different wall volumes never compete at exactly the same depth at corners;
+ * 4) separate room-floor polygons from the large base floor in depth space and
+ *    enable stronger texture filtering to stop floor flicker / moire at oblique
+ *    camera angles.
  *
  * The wall-specific bias is identical for every segment belonging to the same
  * wall, so door/window segment seams inside one wall are not reintroduced.
@@ -79,11 +82,52 @@ function wallDepthTier(id: string): number {
   return 1 + ((hash >>> 0) % 251);
 }
 
+function materialsOf(mesh: THREE.Mesh): THREE.Material[] {
+  return Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+}
+
+function isHorizontalNearFloor(mesh: THREE.Mesh): boolean {
+  const rx = mesh.rotation?.x ?? 0;
+  const horizontal = Math.abs(Math.abs(rx) - Math.PI / 2) < 0.001;
+  const y = mesh.position?.y ?? 0;
+  return horizontal && y > -0.25 && y < 10;
+}
+
+function stabilizeFloorTexture(
+  mat: THREE.Material,
+  renderer?: THREE.WebGLRenderer
+): void {
+  if (!(mat instanceof THREE.MeshStandardMaterial) || !mat.map) return;
+
+  const maxSupported = renderer?.capabilities?.getMaxAnisotropy?.() ?? 1;
+  const anisotropy = Math.max(1, Math.min(8, maxSupported));
+  const tex = mat.map;
+
+  let changed = false;
+  if (tex.anisotropy !== anisotropy) {
+    tex.anisotropy = anisotropy;
+    changed = true;
+  }
+  if (tex.minFilter !== THREE.LinearMipmapLinearFilter) {
+    tex.minFilter = THREE.LinearMipmapLinearFilter;
+    changed = true;
+  }
+  if (tex.magFilter !== THREE.LinearFilter) {
+    tex.magFilter = THREE.LinearFilter;
+    changed = true;
+  }
+  if (!tex.generateMipmaps) {
+    tex.generateMipmaps = true;
+    changed = true;
+  }
+  if (changed) tex.needsUpdate = true;
+}
+
 // Wall boxes intentionally overlap a little at joined endpoints so the corner
 // stays solid. At a right-angle joint, one wall's end cap can become coplanar
 // with the neighbouring wall's side face. Give each wall a deterministic depth
-// tier at draw time. Shared materials are safe here because Three.js calls
-// onBeforeRender immediately before applying the material state for that mesh.
+// tier at draw time. Room floor ShapeGeometry is also deliberately rendered in
+// front of the large base PlaneGeometry to avoid depth-buffer competition.
 const meshPrototype = THREE.Mesh.prototype as any;
 if (!meshPrototype.__openPlan3DWallDepthGuard) {
   const originalOnBeforeRender = meshPrototype.onBeforeRender;
@@ -94,15 +138,39 @@ if (!meshPrototype.__openPlan3DWallDepthGuard) {
       const tier = wallDepthTier(wallId);
       const factor = -tier * 0.01;
       const units = -tier;
-      const mats: THREE.Material[] = Array.isArray(this.material)
-        ? this.material
-        : [this.material];
 
-      for (const mat of mats) {
+      for (const mat of materialsOf(this)) {
         if (!mat) continue;
         mat.polygonOffset = true;
         mat.polygonOffsetFactor = factor;
         mat.polygonOffsetUnits = units;
+      }
+    }
+
+    if (isHorizontalNearFloor(this)) {
+      const geometryType = this.geometry?.type;
+      const isRoomFloor = geometryType === 'ShapeGeometry';
+      const isBaseFloor = geometryType === 'PlaneGeometry' && this.position.y >= 0;
+
+      if (isRoomFloor || isBaseFloor) {
+        // The generated room surface currently sits only ~0.5 cm above the
+        // global textured base plane. At distant/oblique views that separation
+        // can fall below depth-buffer precision. Pull room floors forward and
+        // push the base floor backward in depth space without changing geometry.
+        const factor = isRoomFloor ? -8 : 8;
+        const units = isRoomFloor ? -8 : 8;
+        this.renderOrder = isRoomFloor ? 10 : 0;
+
+        const renderer = args[0] as THREE.WebGLRenderer | undefined;
+        for (const mat of materialsOf(this)) {
+          if (!mat) continue;
+          mat.depthTest = true;
+          mat.depthWrite = true;
+          mat.polygonOffset = true;
+          mat.polygonOffsetFactor = factor;
+          mat.polygonOffsetUnits = units;
+          stabilizeFloorTexture(mat, renderer);
+        }
       }
     }
 
