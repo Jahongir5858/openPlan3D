@@ -6,6 +6,7 @@ interface Env {
 interface SessionUser {
   id: number;
   username: string;
+  role: 'admin' | 'user';
 }
 
 const COOKIE = 'op3d_session';
@@ -61,6 +62,10 @@ async function hashPassword(password: string, salt?: string): Promise<{ hash: st
   return { hash: bytesToBase64(new Uint8Array(bits)), salt: bytesToBase64(saltBytes) };
 }
 
+function withRole<T extends { id: number; username: string }>(row: T): SessionUser {
+  return { id: Number(row.id), username: String(row.username), role: Number(row.id) === 1 ? 'admin' : 'user' };
+}
+
 async function getSessionUser(request: Request, env: Env): Promise<SessionUser | null> {
   const token = parseCookie(request, COOKIE);
   if (!token) return null;
@@ -71,13 +76,17 @@ async function getSessionUser(request: Request, env: Env): Promise<SessionUser |
        FROM sessions s
        JOIN users u ON u.id = s.user_id
       WHERE s.token_hash = ? AND s.expires_at > ?`
-  ).bind(tokenHash, now).first<SessionUser>();
-  return row ?? null;
+  ).bind(tokenHash, now).first<{ id: number; username: string }>();
+  return row ? withRole(row) : null;
 }
 
 async function requireUser(request: Request, env: Env): Promise<SessionUser | Response> {
   const user = await getSessionUser(request, env);
   return user ?? json({ error: 'AUTH_REQUIRED' }, 401);
+}
+
+function requireAdmin(user: SessionUser): Response | null {
+  return user.role === 'admin' ? null : json({ error: 'ADMIN_REQUIRED' }, 403);
 }
 
 async function cleanupSessions(env: Env) {
@@ -96,12 +105,8 @@ async function setup(request: Request, env: Env) {
   const body = await request.json<any>().catch(() => null);
   const username = String(body?.username ?? '').trim().toLowerCase();
   const password = String(body?.password ?? '');
-  if (!/^[a-z0-9._-]{3,64}$/.test(username)) {
-    return json({ error: 'USERNAME_INVALID' }, 400);
-  }
-  if (password.length < 8 || password.length > 128) {
-    return json({ error: 'PASSWORD_INVALID' }, 400);
-  }
+  if (!/^[a-z0-9._-]{3,64}$/.test(username)) return json({ error: 'USERNAME_INVALID' }, 400);
+  if (password.length < 8 || password.length > 128) return json({ error: 'PASSWORD_INVALID' }, 400);
 
   const { hash, salt } = await hashPassword(password);
   try {
@@ -132,7 +137,7 @@ async function loginWithCredentials(username: string, password: string, env: Env
   ).bind(tokenHash, row.id, expiresAt, Date.now()).run();
 
   return json(
-    { user: { id: row.id, username: row.username } },
+    { user: withRole({ id: row.id, username: row.username }) },
     200,
     { 'set-cookie': `${COOKIE}=${encodeURIComponent(token)}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=${SESSION_DAYS * 86400}` }
   );
@@ -225,6 +230,83 @@ async function deleteProject(user: SessionUser, projectId: string, env: Env) {
   return json({ ok: true });
 }
 
+async function adminOverview(env: Env) {
+  const [users, projects] = await Promise.all([
+    env.DB.prepare('SELECT COUNT(*) AS count FROM users').first<{ count: number }>(),
+    env.DB.prepare('SELECT COUNT(*) AS count FROM projects').first<{ count: number }>()
+  ]);
+  return json({ users: Number(users?.count ?? 0), projects: Number(projects?.count ?? 0), centers: 20 });
+}
+
+async function adminUsers(env: Env) {
+  const rows = await env.DB.prepare(
+    `SELECT u.id, u.username, u.created_at AS createdAt, COUNT(p.id) AS projectCount
+       FROM users u
+       LEFT JOIN projects p ON p.user_id = u.id
+      GROUP BY u.id, u.username, u.created_at
+      ORDER BY u.id ASC`
+  ).all();
+  const results = (rows.results ?? []).map((r: any) => ({
+    id: Number(r.id), username: String(r.username), role: Number(r.id) === 1 ? 'admin' : 'user',
+    createdAt: Number(r.createdAt), projectCount: Number(r.projectCount ?? 0)
+  }));
+  return json(results);
+}
+
+async function adminCreateUser(request: Request, env: Env) {
+  const body = await request.json<any>().catch(() => null);
+  const username = String(body?.username ?? '').trim().toLowerCase();
+  const password = String(body?.password ?? '');
+  if (!/^[a-z0-9._-]{3,64}$/.test(username)) return json({ error: 'USERNAME_INVALID' }, 400);
+  if (password.length < 8 || password.length > 128) return json({ error: 'PASSWORD_INVALID' }, 400);
+  const { hash, salt } = await hashPassword(password);
+  try {
+    const result = await env.DB.prepare(
+      'INSERT INTO users (username, password_hash, password_salt, created_at) VALUES (?, ?, ?, ?)'
+    ).bind(username, hash, salt, Date.now()).run();
+    return json({ ok: true, id: result.meta.last_row_id, username }, 201);
+  } catch {
+    return json({ error: 'USERNAME_EXISTS' }, 409);
+  }
+}
+
+async function adminDeleteUser(admin: SessionUser, userId: number, env: Env) {
+  if (userId === 1 || userId === admin.id) return json({ error: 'ADMIN_PROTECTED' }, 409);
+  await env.DB.prepare('DELETE FROM users WHERE id = ?').bind(userId).run();
+  return json({ ok: true });
+}
+
+async function adminResetPassword(request: Request, admin: SessionUser, userId: number, env: Env) {
+  const body = await request.json<any>().catch(() => null);
+  const password = String(body?.password ?? '');
+  if (password.length < 8 || password.length > 128) return json({ error: 'PASSWORD_INVALID' }, 400);
+  const exists = await env.DB.prepare('SELECT id FROM users WHERE id = ?').bind(userId).first<{ id: number }>();
+  if (!exists) return json({ error: 'NOT_FOUND' }, 404);
+  const { hash, salt } = await hashPassword(password);
+  await env.DB.batch([
+    env.DB.prepare('UPDATE users SET password_hash = ?, password_salt = ? WHERE id = ?').bind(hash, salt, userId),
+    ...(userId === admin.id ? [] : [env.DB.prepare('DELETE FROM sessions WHERE user_id = ?').bind(userId)])
+  ]);
+  return json({ ok: true });
+}
+
+async function adminProjects(env: Env) {
+  const rows = await env.DB.prepare(
+    `SELECT p.user_id AS userId, u.username, p.id, p.name, p.updated_at AS updatedAt
+       FROM projects p JOIN users u ON u.id = p.user_id
+      ORDER BY p.updated_at DESC`
+  ).all();
+  return json(rows.results ?? []);
+}
+
+async function adminDeleteProject(userId: number, projectId: string, env: Env) {
+  await env.DB.batch([
+    env.DB.prepare('DELETE FROM project_chunks WHERE user_id = ? AND project_id = ?').bind(userId, projectId),
+    env.DB.prepare('DELETE FROM projects WHERE user_id = ? AND id = ?').bind(userId, projectId)
+  ]);
+  return json({ ok: true });
+}
+
 async function api(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname;
@@ -238,6 +320,24 @@ async function api(request: Request, env: Env): Promise<Response> {
   const auth = await requireUser(request, env);
   if (auth instanceof Response) return auth;
   const user = auth as SessionUser;
+
+  if (path.startsWith('/api/admin/')) {
+    const denied = requireAdmin(user);
+    if (denied) return denied;
+
+    if (path === '/api/admin/overview' && request.method === 'GET') return adminOverview(env);
+    if (path === '/api/admin/users' && request.method === 'GET') return adminUsers(env);
+    if (path === '/api/admin/users' && request.method === 'POST') return adminCreateUser(request, env);
+    if (path === '/api/admin/projects' && request.method === 'GET') return adminProjects(env);
+
+    const userMatch = path.match(/^\/api\/admin\/users\/(\d+)$/);
+    if (userMatch && request.method === 'DELETE') return adminDeleteUser(user, Number(userMatch[1]), env);
+    const passMatch = path.match(/^\/api\/admin\/users\/(\d+)\/password$/);
+    if (passMatch && request.method === 'PUT') return adminResetPassword(request, user, Number(passMatch[1]), env);
+    const projectMatch = path.match(/^\/api\/admin\/projects\/(\d+)\/([^/]+)$/);
+    if (projectMatch && request.method === 'DELETE') return adminDeleteProject(Number(projectMatch[1]), decodeURIComponent(projectMatch[2]), env);
+    return json({ error: 'NOT_FOUND' }, 404);
+  }
 
   if (path === '/api/projects' && request.method === 'GET') return listProjects(user, env);
   const match = path.match(/^\/api\/projects\/([^/]+)$/);
