@@ -1,18 +1,19 @@
 import * as THREE from 'three';
 
 /**
- * ThreeViewer builds walls around door/window openings from several adjacent
- * BoxGeometry meshes. At those T-junctions two faces can end up exactly
- * coplanar. WebGL then alternates which face wins the depth test while the
- * camera moves, which appears as a shimmering / flickering strip (z-fighting).
+ * ThreeViewer builds walls around door/window openings and wall corners from
+ * several adjacent BoxGeometry meshes. At those junctions two faces can end up
+ * exactly coplanar. WebGL can then alternate which face wins the depth test as
+ * the camera moves, which appears as shimmering / flickering (z-fighting).
  *
- * Two safeguards are applied here:
+ * Safeguards applied here:
  * 1) neutralise positive polygon offsets used by wall interior materials;
- * 2) give the dark-brown door-frame material a tiny negative depth bias so its
- *    jamb/header faces win consistently where they touch the wall opening.
+ * 2) give the dark-brown door-frame material a small negative depth bias;
+ * 3) give every wall its own stable, tiny depth tier while rendering, so two
+ *    different wall volumes never compete at exactly the same depth at corners.
  *
- * Negative offsets used by the floor and offsets assigned after material
- * construction (for example the ground plane) are left untouched.
+ * The wall-specific bias is identical for every segment belonging to the same
+ * wall, so door/window segment seams inside one wall are not reintroduced.
  */
 const materialPrototype = THREE.Material.prototype as THREE.Material & {
   __openPlan3DSeamGuard?: boolean;
@@ -59,6 +60,58 @@ if (!materialPrototype.__openPlan3DSeamGuard) {
   };
 
   Object.defineProperty(THREE.Material.prototype, '__openPlan3DSeamGuard', {
+    value: true,
+    configurable: false,
+    enumerable: false,
+    writable: false
+  });
+}
+
+/** Stable FNV-1a hash used only to assign a deterministic wall depth tier. */
+function wallDepthTier(id: string): number {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < id.length; i++) {
+    hash ^= id.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  // 1..251 keeps the offset tiny, while making collisions between adjacent
+  // wall ids very unlikely.
+  return 1 + ((hash >>> 0) % 251);
+}
+
+// Wall boxes intentionally overlap a little at joined endpoints so the corner
+// stays solid. At a right-angle joint, one wall's end cap can become coplanar
+// with the neighbouring wall's side face. Give each wall a deterministic depth
+// tier at draw time. Shared materials are safe here because Three.js calls
+// onBeforeRender immediately before applying the material state for that mesh.
+const meshPrototype = THREE.Mesh.prototype as any;
+if (!meshPrototype.__openPlan3DWallDepthGuard) {
+  const originalOnBeforeRender = meshPrototype.onBeforeRender;
+
+  meshPrototype.onBeforeRender = function (...args: any[]) {
+    const wallId = this.userData?.wallId;
+    if (typeof wallId === 'string' && wallId.length > 0) {
+      const tier = wallDepthTier(wallId);
+      const factor = -tier * 0.01;
+      const units = -tier;
+      const mats: THREE.Material[] = Array.isArray(this.material)
+        ? this.material
+        : [this.material];
+
+      for (const mat of mats) {
+        if (!mat) continue;
+        mat.polygonOffset = true;
+        mat.polygonOffsetFactor = factor;
+        mat.polygonOffsetUnits = units;
+      }
+    }
+
+    if (typeof originalOnBeforeRender === 'function') {
+      originalOnBeforeRender.apply(this, args);
+    }
+  };
+
+  Object.defineProperty(THREE.Mesh.prototype, '__openPlan3DWallDepthGuard', {
     value: true,
     configurable: false,
     enumerable: false,
@@ -129,13 +182,13 @@ export function getMaterial(id: string): FloorMaterial {
   // Handle legacy material IDs
   const legacyMap: Record<string, string> = {
     'hardwood': 'light-oak',
-    'tile': 'ceramic-white', 
+    'tile': 'ceramic-white',
     'carpet': 'carpet-beige',
     'marble': 'marble-white',
     'light-wood': 'light-oak',
     'dark-wood': 'walnut',
   };
-  
+
   const materialId = legacyMap[id] || id;
   return floorMaterials.find(m => m.id === materialId)
     ?? floorMaterials.find(m => m.id === 'light-oak')!;
@@ -148,7 +201,7 @@ export function getWallColor(id: string): WallColor {
     'beige': 'cream',
     'sage': 'sage-green',
   };
-  
+
   const colorId = legacyMap[id] || id;
   return wallColors.find(c => c.id === colorId) ?? wallColors[0];
 }
