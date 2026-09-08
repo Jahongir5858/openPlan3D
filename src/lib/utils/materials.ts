@@ -1,3 +1,51 @@
+import * as THREE from 'three';
+
+/**
+ * ThreeViewer builds walls around door/window openings from several adjacent
+ * BoxGeometry meshes. A positive polygon offset on the interior wall material
+ * can expose the neighbouring box side faces at those T-junctions, which shows
+ * up as thin dark vertical/diagonal seams around openings.
+ *
+ * Keep negative polygon offsets (used by the floor) and offsets assigned after
+ * material construction (used by the ground), but neutralise positive offsets
+ * passed through Material constructor parameters. This removes the wall seams
+ * without changing wall/opening geometry or dimensions.
+ */
+const materialPrototype = THREE.Material.prototype as THREE.Material & {
+  __openPlan3DSeamGuard?: boolean;
+};
+
+if (!materialPrototype.__openPlan3DSeamGuard) {
+  const originalSetValues = THREE.Material.prototype.setValues;
+
+  THREE.Material.prototype.setValues = function (
+    values?: THREE.MaterialParameters
+  ): void {
+    let safeValues = values;
+
+    if (
+      values?.polygonOffset === true &&
+      (values.polygonOffsetFactor ?? 0) > 0
+    ) {
+      safeValues = {
+        ...values,
+        polygonOffset: false,
+        polygonOffsetFactor: 0,
+        polygonOffsetUnits: 0
+      };
+    }
+
+    originalSetValues.call(this, safeValues);
+  };
+
+  Object.defineProperty(THREE.Material.prototype, '__openPlan3DSeamGuard', {
+    value: true,
+    configurable: false,
+    enumerable: false,
+    writable: false
+  });
+}
+
 export interface FloorMaterial {
   id: string;
   name: string;
