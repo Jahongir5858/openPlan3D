@@ -2,14 +2,17 @@ import * as THREE from 'three';
 
 /**
  * ThreeViewer builds walls around door/window openings from several adjacent
- * BoxGeometry meshes. A positive polygon offset on the interior wall material
- * can expose the neighbouring box side faces at those T-junctions, which shows
- * up as thin dark vertical/diagonal seams around openings.
+ * BoxGeometry meshes. At those T-junctions two faces can end up exactly
+ * coplanar. WebGL then alternates which face wins the depth test while the
+ * camera moves, which appears as a shimmering / flickering strip (z-fighting).
  *
- * Keep negative polygon offsets (used by the floor) and offsets assigned after
- * material construction (used by the ground), but neutralise positive offsets
- * passed through Material constructor parameters. This removes the wall seams
- * without changing wall/opening geometry or dimensions.
+ * Two safeguards are applied here:
+ * 1) neutralise positive polygon offsets used by wall interior materials;
+ * 2) give the dark-brown door-frame material a tiny negative depth bias so its
+ *    jamb/header faces win consistently where they touch the wall opening.
+ *
+ * Negative offsets used by the floor and offsets assigned after material
+ * construction (for example the ground plane) are left untouched.
  */
 const materialPrototype = THREE.Material.prototype as THREE.Material & {
   __openPlan3DSeamGuard?: boolean;
@@ -32,6 +35,23 @@ if (!materialPrototype.__openPlan3DSeamGuard) {
         polygonOffset: false,
         polygonOffsetFactor: 0,
         polygonOffsetUnits: 0
+      };
+    }
+
+    // Door jambs/header are intentionally placed flush against the opening.
+    // Their side faces can be coplanar with the wall segment faces. Bias only
+    // this exact material slightly toward the camera to eliminate z-fighting
+    // without changing any wall/door dimensions or positions.
+    const standardValues = values as THREE.MeshStandardMaterialParameters | undefined;
+    const isDoorFrameMaterial =
+      standardValues?.color === 0x6b4423 && standardValues?.roughness === 0.6;
+
+    if (isDoorFrameMaterial) {
+      safeValues = {
+        ...safeValues,
+        polygonOffset: true,
+        polygonOffsetFactor: -2,
+        polygonOffsetUnits: -2
       };
     }
 
