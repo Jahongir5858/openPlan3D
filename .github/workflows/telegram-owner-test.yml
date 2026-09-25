@@ -38,13 +38,17 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Inject Owner Presence
-        run: |
-          cp telegram-owner-test/owner-presence.js tweb/public/owner-presence.js
-          node telegram-owner-test/inject.mjs tweb/index.html
+        run: node telegram-owner-test/inject.mjs tweb/index.html
 
       - name: Build Telegram Web K
         working-directory: tweb
         run: pnpm exec vite build --base=./
+
+      - name: Restore Telegram public assets and Owner Presence
+        run: |
+          mkdir -p tweb/dist/assets
+          cp -R tweb/public/assets/. tweb/dist/assets/
+          cp telegram-owner-test/owner-presence.js tweb/dist/owner-presence.js
 
       - name: Publish build into branch folder
         run: |
