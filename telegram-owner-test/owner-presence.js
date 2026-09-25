@@ -1,13 +1,13 @@
 (()=>{'use strict';
-const VERSION='tg-owner-presence-poc-0.3-stable-ui';
+const VERSION='tg-owner-presence-poc-0.4-peer-lock';
 const MODEL_BASE='https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@0.22.2/weights';
 const FACEAPI_SRC='https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js';
 const KEY_OWNER='tgOwnerPresence.owner.v1';
-const KEY_PROTECTED='tgOwnerPresence.protected.v1';
+const KEY_PROTECTED='tgOwnerPresence.protectedPeer.v2';
 const THRESHOLD=.50, LOOP_MS=170, GOOD_FRAMES=2, NO_FACE_MS=320, EYE_OPEN_MIN=.16, MAX_YAW=.38, MAX_TILT=.22, EYE_CLOSE_GRACE=520;
 
-let modelReady=false, stream=null, owner=null, monitoring=false, good=0, noFaceAt=0, eyesClosedAt=0, currentLocked=true;
-let protectedRoute=localStorage.getItem(KEY_PROTECTED)||'';
+let modelReady=false, stream=null, owner=null, monitoring=false, good=0, noFaceAt=0, eyesClosedAt=0, currentLocked=true, ownerPresent=false;
+let protectedPeerId=localStorage.getItem(KEY_PROTECTED)||'';
 
 const css=document.createElement('style');
 css.textContent=`
@@ -19,6 +19,7 @@ css.textContent=`
 .op-chat-overlay{position:absolute!important;inset:0!important;z-index:2147483000!important;background:#101923!important;color:white!important;display:flex!important;align-items:center!important;justify-content:center!important;text-align:center!important;padding:20px!important}
 .op-chat-overlay .box{background:#1f2c38;border-radius:20px;padding:24px;max-width:340px;width:90%;box-shadow:0 10px 30px #0008}.op-chat-overlay .big{font-size:38px}
 .op-chat-overlay.hidden{display:none!important}.op-protected-lock>*:not(.op-chat-overlay){visibility:hidden!important}.op-protected-lock>.op-chat-overlay{visibility:visible!important}
+.op-secret-hidden{display:none!important}
 `;
 document.head.appendChild(css);
 
@@ -56,7 +57,17 @@ const faceP=$('op-face'), eyesP=$('op-eyes'), lookP=$('op-look');
 const cameraBtn=$('op-camera'), enrollBtn=$('op-enroll'), protectBtn=$('op-protect'), unprotectBtn=$('op-unprotect');
 fab.onclick=()=>{mountOwnerUi();panel.classList.add('open')}; $('op-close').onclick=()=>{panel.classList.remove('open');setTimeout(mountOwnerUi,0)};
 
-function routeKey(){return location.pathname+location.search+location.hash}
+function getActivePeerId(){
+  const active=document.querySelector('.chatlist-chat.active[data-peer-id]');
+  if(active?.dataset?.peerId) return String(active.dataset.peerId);
+  const m=String(location.hash||'').match(/^#(-?\d+)/);
+  return m?m[1]:'';
+}
+function getProtectedRows(){
+  if(!protectedPeerId) return [];
+  return [...document.querySelectorAll('.chatlist-chat[data-peer-id]')].filter(el=>String(el.dataset.peerId)===String(protectedPeerId));
+}
+function isProtectedCurrent(){return !!protectedPeerId && String(getActivePeerId())===String(protectedPeerId)}
 function setPill(el,v){el.classList.toggle('ok',v===true);el.classList.toggle('bad',v===false)}
 function loadOwner(){try{const x=JSON.parse(localStorage.getItem(KEY_OWNER)||'null');return Array.isArray(x)&&x.length===128?x:null}catch{return null}}
 function saveOwner(x){localStorage.setItem(KEY_OWNER,JSON.stringify(x))}
@@ -75,15 +86,46 @@ cameraBtn.onclick=startCamera; enrollBtn.onclick=enroll;
 
 function activeChat(){const nodes=[...document.querySelectorAll('.chat.tabs-tab,.chat')];const visible=nodes.filter(el=>{const r=el.getBoundingClientRect();const st=getComputedStyle(el);return r.width>120&&r.height>200&&st.display!=='none'&&st.visibility!=='hidden'});return visible[visible.length-1]||null}
 function ensureOverlay(chat){let ov=chat.querySelector(':scope > .op-chat-overlay');if(!ov){ov=document.createElement('div');ov.className='op-chat-overlay';ov.innerHTML='<div class="box"><div class="big">🔒</div><h2>Maxfiy chat</h2><div class="op-reason">Yuz + ko‘z + qarash tekshirilmoqda…</div></div>';chat.appendChild(ov)}return ov}
-function shouldProtect(){return !!protectedRoute && routeKey()===protectedRoute}
-function applyLock(reason){currentLocked=true;const chat=activeChat();if(!chat||!shouldProtect())return;const ov=ensureOverlay(chat);chat.classList.add('op-protected-lock');ov.classList.remove('hidden');const r=ov.querySelector('.op-reason');if(r)r.textContent=reason||'Chat yopiq'}
-function applyUnlock(){currentLocked=false;const chat=activeChat();if(!chat||!shouldProtect())return;const ov=ensureOverlay(chat);chat.classList.remove('op-protected-lock');ov.classList.add('hidden')}
-function refreshProtection(){const chat=activeChat();document.querySelectorAll('.chat.op-protected-lock').forEach(x=>{if(x!==chat)x.classList.remove('op-protected-lock')});document.querySelectorAll('.op-chat-overlay').forEach(x=>{if(x.parentElement!==chat)x.classList.add('hidden')});if(!shouldProtect())return;if(!owner)applyLock('Owner ro‘yxatdan o‘tmagan');else if(!stream)applyLock('Owner Presence: kamerani yoqing');else if(currentLocked)applyLock('Yuz + ko‘z + qarash tekshirilmoqda…')}
+function applyLock(reason){currentLocked=true;ownerPresent=false;const chat=activeChat();if(!chat||!isProtectedCurrent())return;const ov=ensureOverlay(chat);chat.classList.add('op-protected-lock');ov.classList.remove('hidden');const r=ov.querySelector('.op-reason');if(r)r.textContent=reason||'Chat yopiq'}
+function applyUnlock(){currentLocked=false;ownerPresent=true;const chat=activeChat();if(!chat||!isProtectedCurrent())return;const ov=ensureOverlay(chat);chat.classList.remove('op-protected-lock');ov.classList.add('hidden')}
+function updateSecretRows(){
+  document.querySelectorAll('.chatlist-chat.op-secret-hidden').forEach(el=>el.classList.remove('op-secret-hidden'));
+  if(!protectedPeerId||ownerPresent) return;
+  getProtectedRows().forEach(el=>el.classList.add('op-secret-hidden'));
+}
+function refreshProtection(){
+  updateSecretRows();
+  const chat=activeChat();
+  document.querySelectorAll('.chat.op-protected-lock').forEach(x=>{if(x!==chat||!isProtectedCurrent())x.classList.remove('op-protected-lock')});
+  document.querySelectorAll('.op-chat-overlay').forEach(x=>{if(x.parentElement!==chat||!isProtectedCurrent())x.classList.add('hidden')});
+  if(!isProtectedCurrent()) return;
+  if(!owner) applyLock('Owner ro‘yxatdan o‘tmagan');
+  else if(!stream) applyLock('Owner Presence: kamerani yoqing');
+  else if(!ownerPresent) applyLock('Yuz + ko‘z + qarash tekshirilmoqda…');
+  else applyUnlock();
+}
 
-protectBtn.onclick=()=>{const chat=activeChat();if(!chat){status.textContent='Avval Telegramda chatni oching';return}protectedRoute=routeKey();localStorage.setItem(KEY_PROTECTED,protectedRoute);status.textContent='Joriy chat himoyalandi: '+protectedRoute;currentLocked=true;refreshProtection();ensureMonitor()};
-unprotectBtn.onclick=()=>{protectedRoute='';localStorage.removeItem(KEY_PROTECTED);document.querySelectorAll('.chat.op-protected-lock').forEach(x=>x.classList.remove('op-protected-lock'));document.querySelectorAll('.op-chat-overlay').forEach(x=>x.remove());status.textContent='Chat himoyasi olib tashlandi'};
+protectBtn.onclick=()=>{
+  const peerId=getActivePeerId();
+  if(!peerId){status.textContent='Avval Telegramda kerakli chatni oching';return}
+  protectedPeerId=peerId;
+  localStorage.setItem(KEY_PROTECTED,protectedPeerId);
+  ownerPresent=false;currentLocked=true;good=0;noFaceAt=0;eyesClosedAt=0;
+  status.textContent='Maxfiy chat saqlandi · peer '+protectedPeerId;
+  refreshProtection();
+  ensureMonitor();
+};
+unprotectBtn.onclick=()=>{
+  protectedPeerId='';
+  localStorage.removeItem(KEY_PROTECTED);
+  ownerPresent=false;currentLocked=true;
+  document.querySelectorAll('.chatlist-chat.op-secret-hidden').forEach(x=>x.classList.remove('op-secret-hidden'));
+  document.querySelectorAll('.chat.op-protected-lock').forEach(x=>x.classList.remove('op-protected-lock'));
+  document.querySelectorAll('.op-chat-overlay').forEach(x=>x.remove());
+  status.textContent='Chat himoyasi olib tashlandi';
+};
 
-async function monitor(){if(monitoring)return;monitoring=true;while(true){const started=performance.now();try{if(!shouldProtect()){good=0;noFaceAt=0}else if(document.hidden){applyLock('Telegram oynasi yashirildi')}else if(!owner){applyLock('Owner ro‘yxatdan o‘tmagan')}else if(!stream||stream.getVideoTracks()[0]?.readyState!=='live'){applyLock('Kamera ishlamayapti')}else{const f=await detect(),now=performance.now();if(!f.length){setPill(faceP,false);setPill(eyesP,false);setPill(lookP,false);good=0;if(!noFaceAt)noFaceAt=now;if(now-noFaceAt>=NO_FACE_MS)applyLock('Yuz ko‘rinmayapti')}else if(f.length>1){noFaceAt=0;good=0;applyLock('Bir nechta yuz aniqlandi')}else{noFaceAt=0;const ownerOk=dist(owner,Array.from(f[0].descriptor))<=THRESHOLD,a=attention(f[0]);setPill(faceP,ownerOk);setPill(eyesP,a.eyesOpen);setPill(lookP,a.frontal);faceP.textContent=ownerOk?'🙂 Owner':'🙂 Boshqa yuz';eyesP.textContent=a.eyesOpen?'👁 Ko‘zlar ochiq':'👁 Ko‘zlar yopiq';lookP.textContent=a.frontal?'🎯 Qarash OK':'🎯 Chetga qarash';if(!ownerOk){eyesClosedAt=0;good=0;applyLock('Boshqa yuz aniqlandi')}else if(!a.eyesOpen){good=0;if(!eyesClosedAt)eyesClosedAt=now;if(now-eyesClosedAt>EYE_CLOSE_GRACE)applyLock('Ko‘zlaringizni oching')}else if(!a.frontal){eyesClosedAt=0;good=0;applyLock('Telefon ekraniga qarang')}else{eyesClosedAt=0;good++;if(good>=GOOD_FRAMES)applyUnlock()}}}}catch(e){applyLock('Face engine xatosi');debug.textContent=String(e?.message||e)}refreshProtection();await new Promise(r=>setTimeout(r,Math.max(30,LOOP_MS-(performance.now()-started))))}}
+async function monitor(){if(monitoring)return;monitoring=true;while(true){const started=performance.now();try{if(!protectedPeerId){ownerPresent=false;good=0;noFaceAt=0}else if(document.hidden){applyLock('Telegram oynasi yashirildi')}else if(!owner){applyLock('Owner ro‘yxatdan o‘tmagan')}else if(!stream||stream.getVideoTracks()[0]?.readyState!=='live'){applyLock('Kamera ishlamayapti')}else{const f=await detect(),now=performance.now();if(!f.length){setPill(faceP,false);setPill(eyesP,false);setPill(lookP,false);good=0;if(!noFaceAt)noFaceAt=now;if(now-noFaceAt>=NO_FACE_MS){ownerPresent=false;applyLock('Yuz ko‘rinmayapti')}}else if(f.length>1){noFaceAt=0;good=0;ownerPresent=false;applyLock('Bir nechta yuz aniqlandi')}else{noFaceAt=0;const ownerOk=dist(owner,Array.from(f[0].descriptor))<=THRESHOLD,a=attention(f[0]);setPill(faceP,ownerOk);setPill(eyesP,a.eyesOpen);setPill(lookP,a.frontal);faceP.textContent=ownerOk?'🙂 Owner':'🙂 Boshqa yuz';eyesP.textContent=a.eyesOpen?'👁 Ko‘zlar ochiq':'👁 Ko‘zlar yopiq';lookP.textContent=a.frontal?'🎯 Qarash OK':'🎯 Chetga qarash';if(!ownerOk){eyesClosedAt=0;good=0;ownerPresent=false;applyLock('Boshqa yuz aniqlandi')}else if(!a.eyesOpen){good=0;if(!eyesClosedAt)eyesClosedAt=now;if(now-eyesClosedAt>EYE_CLOSE_GRACE){ownerPresent=false;applyLock('Ko‘zlaringizni oching')}}else if(!a.frontal){eyesClosedAt=0;good=0;ownerPresent=false;applyLock('Telefon ekraniga qarang')}else{eyesClosedAt=0;good++;if(good>=GOOD_FRAMES){ownerPresent=true;applyUnlock()}}}}}catch(e){applyLock('Face engine xatosi');debug.textContent=String(e?.message||e)}refreshProtection();await new Promise(r=>setTimeout(r,Math.max(30,LOOP_MS-(performance.now()-started))))}}
 function ensureMonitor(){monitor()}
 
 let remountQueued=false;
@@ -101,7 +143,7 @@ window.addEventListener('hashchange',()=>{good=0;currentLocked=true;setTimeout(r
 window.addEventListener('popstate',()=>{good=0;currentLocked=true;setTimeout(refreshProtection,50)});
 document.addEventListener('visibilitychange',()=>{if(document.hidden)applyLock('Telegram oynasi yashirildi')});
 window.addEventListener('blur',()=>applyLock('Oyna fokusdan chiqdi'));
-debug.textContent=VERSION+' · secure='+window.isSecureContext+' · route='+routeKey();
+debug.textContent=VERSION+' · secure='+window.isSecureContext+' · peer='+(protectedPeerId||'none');
 owner=loadOwner(); loadModels(); setInterval(()=>{
   if(!document.documentElement.contains(fab)||!document.documentElement.contains(panel)) mountOwnerUi();
   refreshProtection();
