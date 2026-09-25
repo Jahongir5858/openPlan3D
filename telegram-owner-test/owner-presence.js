@@ -1,5 +1,5 @@
 (()=>{'use strict';
-const VERSION='tg-owner-presence-poc-0.1';
+const VERSION='tg-owner-presence-poc-0.2-persistent-ui';
 const MODEL_BASE='https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@0.22.2/weights';
 const FACEAPI_SRC='https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js';
 const KEY_OWNER='tgOwnerPresence.owner.v1';
@@ -42,11 +42,21 @@ const panel=document.createElement('div'); panel.id='op-panel'; panel.innerHTML=
   <div id="op-debug" class="op-status"></div>
 </div>`; document.documentElement.appendChild(panel);
 
+function mountOwnerUi(){
+  const target=document.body||document.documentElement;
+  if(document.head && !document.head.contains(css)) document.head.appendChild(css);
+  if(!document.documentElement.contains(fab)) target.appendChild(fab);
+  if(!document.documentElement.contains(panel)) target.appendChild(panel);
+  fab.hidden=false;
+  fab.style.display='block';
+}
+mountOwnerUi();
+
 const $=id=>document.getElementById(id);
 const video=$('op-video'), status=$('op-status'), debug=$('op-debug');
 const faceP=$('op-face'), eyesP=$('op-eyes'), lookP=$('op-look');
 const cameraBtn=$('op-camera'), enrollBtn=$('op-enroll'), protectBtn=$('op-protect'), unprotectBtn=$('op-unprotect');
-fab.onclick=()=>panel.classList.add('open'); $('op-close').onclick=()=>panel.classList.remove('open');
+fab.onclick=()=>{mountOwnerUi();panel.classList.add('open')}; $('op-close').onclick=()=>{panel.classList.remove('open');setTimeout(mountOwnerUi,0)};
 
 function routeKey(){return location.pathname+location.search+location.hash}
 function setPill(el,v){el.classList.toggle('ok',v===true);el.classList.toggle('bad',v===false)}
@@ -78,11 +88,11 @@ unprotectBtn.onclick=()=>{protectedRoute='';localStorage.removeItem(KEY_PROTECTE
 async function monitor(){if(monitoring)return;monitoring=true;while(true){const started=performance.now();try{if(!shouldProtect()){good=0;noFaceAt=0}else if(document.hidden){applyLock('Telegram oynasi yashirildi')}else if(!owner){applyLock('Owner ro‘yxatdan o‘tmagan')}else if(!stream||stream.getVideoTracks()[0]?.readyState!=='live'){applyLock('Kamera ishlamayapti')}else{const f=await detect(),now=performance.now();if(!f.length){setPill(faceP,false);setPill(eyesP,false);setPill(lookP,false);good=0;if(!noFaceAt)noFaceAt=now;if(now-noFaceAt>=NO_FACE_MS)applyLock('Yuz ko‘rinmayapti')}else if(f.length>1){noFaceAt=0;good=0;applyLock('Bir nechta yuz aniqlandi')}else{noFaceAt=0;const ownerOk=dist(owner,Array.from(f[0].descriptor))<=THRESHOLD,a=attention(f[0]);setPill(faceP,ownerOk);setPill(eyesP,a.eyesOpen);setPill(lookP,a.frontal);faceP.textContent=ownerOk?'🙂 Owner':'🙂 Boshqa yuz';eyesP.textContent=a.eyesOpen?'👁 Ko‘zlar ochiq':'👁 Ko‘zlar yopiq';lookP.textContent=a.frontal?'🎯 Qarash OK':'🎯 Chetga qarash';if(!ownerOk){eyesClosedAt=0;good=0;applyLock('Boshqa yuz aniqlandi')}else if(!a.eyesOpen){good=0;if(!eyesClosedAt)eyesClosedAt=now;if(now-eyesClosedAt>EYE_CLOSE_GRACE)applyLock('Ko‘zlaringizni oching')}else if(!a.frontal){eyesClosedAt=0;good=0;applyLock('Telefon ekraniga qarang')}else{eyesClosedAt=0;good++;if(good>=GOOD_FRAMES)applyUnlock()}}}}catch(e){applyLock('Face engine xatosi');debug.textContent=String(e?.message||e)}refreshProtection();await new Promise(r=>setTimeout(r,Math.max(30,LOOP_MS-(performance.now()-started))))}}
 function ensureMonitor(){monitor()}
 
-const mo=new MutationObserver(()=>refreshProtection()); mo.observe(document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:['class','style']});
+const mo=new MutationObserver(()=>{mountOwnerUi();refreshProtection()}); mo.observe(document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:['class','style']});
 window.addEventListener('hashchange',()=>{good=0;currentLocked=true;setTimeout(refreshProtection,50)});
 window.addEventListener('popstate',()=>{good=0;currentLocked=true;setTimeout(refreshProtection,50)});
 document.addEventListener('visibilitychange',()=>{if(document.hidden)applyLock('Telegram oynasi yashirildi')});
 window.addEventListener('blur',()=>applyLock('Oyna fokusdan chiqdi'));
 debug.textContent=VERSION+' · secure='+window.isSecureContext+' · route='+routeKey();
-owner=loadOwner(); loadModels(); setInterval(refreshProtection,700);
+owner=loadOwner(); loadModels(); setInterval(()=>{mountOwnerUi();refreshProtection()},500);
 })();
