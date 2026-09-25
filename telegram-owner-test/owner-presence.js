@@ -1,17 +1,19 @@
 (()=>{'use strict';
-const VERSION='tg-owner-presence-poc-0.4-peer-lock';
+const VERSION='tg-owner-presence-poc-0.5-settings-safe-list';
 const MODEL_BASE='https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@0.22.2/weights';
 const FACEAPI_SRC='https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js';
 const KEY_OWNER='tgOwnerPresence.owner.v1';
 const KEY_PROTECTED='tgOwnerPresence.protectedPeer.v2';
+const KEY_SHOW_FAB='tgOwnerPresence.showEye.v1';
 const THRESHOLD=.50, LOOP_MS=170, GOOD_FRAMES=2, NO_FACE_MS=320, EYE_OPEN_MIN=.16, MAX_YAW=.38, MAX_TILT=.22, EYE_CLOSE_GRACE=520;
 
 let modelReady=false, stream=null, owner=null, monitoring=false, good=0, noFaceAt=0, eyesClosedAt=0, currentLocked=true, ownerPresent=false;
 let protectedPeerId=localStorage.getItem(KEY_PROTECTED)||'';
+let showFab=localStorage.getItem(KEY_SHOW_FAB)!=='0';
 
 const css=document.createElement('style');
 css.textContent=`
-#op-fab{position:fixed;right:14px;bottom:18px;z-index:2147483647;width:52px;height:52px;border:0;border-radius:50%;background:#3390ec;color:white;font-size:23px;box-shadow:0 6px 24px #0008}
+#op-fab{position:fixed;right:14px;bottom:18px;z-index:2147483647;width:52px;height:52px;border:0;border-radius:50%;background:#3390ec;color:white;font-size:23px;box-shadow:0 6px 24px #0008}\n#op-fab.op-hidden{display:none!important}
 #op-panel{position:fixed;inset:0;z-index:2147483646;background:#0e1621f5;color:#fff;display:none;overflow:auto;font-family:system-ui,-apple-system,Segoe UI,sans-serif}
 #op-panel.open{display:block}.op-card{max-width:460px;margin:18px auto;padding:18px}.op-video{width:100%;aspect-ratio:3/4;max-height:52dvh;object-fit:cover;background:#000;border-radius:18px;transform:scaleX(-1)}
 .op-btn{width:100%;border:0;border-radius:13px;padding:13px;margin:7px 0;background:#3390ec;color:#fff;font-weight:700;font-size:15px}.op-btn.secondary{background:#2b3a48}.op-btn.danger{background:#763333}
@@ -19,7 +21,19 @@ css.textContent=`
 .op-chat-overlay{position:absolute!important;inset:0!important;z-index:2147483000!important;background:#101923!important;color:white!important;display:flex!important;align-items:center!important;justify-content:center!important;text-align:center!important;padding:20px!important}
 .op-chat-overlay .box{background:#1f2c38;border-radius:20px;padding:24px;max-width:340px;width:90%;box-shadow:0 10px 30px #0008}.op-chat-overlay .big{font-size:38px}
 .op-chat-overlay.hidden{display:none!important}.op-protected-lock>*:not(.op-chat-overlay){visibility:hidden!important}.op-protected-lock>.op-chat-overlay{visibility:visible!important}
-.op-secret-hidden{display:none!important}
+.op-secret-masked{position:relative!important;overflow:hidden!important}
+.op-secret-masked>*{opacity:0!important;pointer-events:none!important}
+.op-secret-masked:after{content:"🔒 Maxfiy chat";position:absolute;inset:0;display:flex;align-items:center;padding:0 18px;background:var(--surface-color,#212121);color:var(--primary-text-color,#fff);font-weight:600;font-size:16px;pointer-events:none}
+#op-settings-row{display:flex;align-items:center;gap:12px;min-height:52px;padding:8px 16px;cursor:pointer;border-radius:10px}
+#op-settings-row:active{background:rgba(255,255,255,.06)}
+#op-settings-row .op-settings-icon{font-size:22px;width:30px;text-align:center}
+#op-settings-row .op-settings-copy{flex:1;min-width:0}
+#op-settings-row .op-settings-title{font-size:16px;line-height:20px}
+#op-settings-row .op-settings-sub{font-size:12px;line-height:16px;color:var(--secondary-text-color,#999);margin-top:2px}
+#op-settings-switch{width:44px;height:26px;border-radius:999px;background:#777;position:relative;flex:0 0 auto;transition:.15s}
+#op-settings-switch:after{content:"";position:absolute;width:20px;height:20px;top:3px;left:3px;border-radius:50%;background:white;transition:.15s}
+#op-settings-switch.on{background:#3390ec}
+#op-settings-switch.on:after{left:21px}
 `;
 document.head.appendChild(css);
 
@@ -43,13 +57,42 @@ const panel=document.createElement('div'); panel.id='op-panel'; panel.innerHTML=
   <div id="op-debug" class="op-status"></div>
 </div>`; document.documentElement.appendChild(panel);
 
+function applyFabVisibility(){
+  fab.classList.toggle('op-hidden',!showFab);
+}
 function mountOwnerUi(){
   const target=document.body||document.documentElement;
   if(document.head && !document.head.contains(css)) document.head.appendChild(css);
   if(!document.documentElement.contains(fab)) target.appendChild(fab);
   if(!document.documentElement.contains(panel)) target.appendChild(panel);
+  applyFabVisibility();
+}
+function ensureSettingsToggle(){
+  const host=document.querySelector('.settings-container .profile-buttons');
+  if(!host) return;
+  let row=document.getElementById('op-settings-row');
+  if(!row){
+    row=document.createElement('div');
+    row.id='op-settings-row';
+    row.innerHTML='<div class="op-settings-icon">👁</div><div class="op-settings-copy"><div class="op-settings-title">Owner Presence</div><div class="op-settings-sub">Ko‘z tugmasini ko‘rsatish</div></div><div id="op-settings-switch"></div>';
+    row.addEventListener('click',(e)=>{
+      e.preventDefault();
+      e.stopPropagation();
+      showFab=!showFab;
+      localStorage.setItem(KEY_SHOW_FAB,showFab?'1':'0');
+      applyFabVisibility();
+      updateSettingsToggle();
+    });
+    host.appendChild(row);
+  }
+  updateSettingsToggle();
+}
+function updateSettingsToggle(){
+  const sw=document.getElementById('op-settings-switch');
+  if(sw) sw.classList.toggle('on',showFab);
 }
 mountOwnerUi();
+ensureSettingsToggle();
 
 const $=id=>document.getElementById(id);
 const video=$('op-video'), status=$('op-status'), debug=$('op-debug');
@@ -90,8 +133,9 @@ function applyLock(reason){currentLocked=true;ownerPresent=false;const chat=acti
 function applyUnlock(){currentLocked=false;ownerPresent=true;const chat=activeChat();if(!chat||!isProtectedCurrent())return;const ov=ensureOverlay(chat);chat.classList.remove('op-protected-lock');ov.classList.add('hidden')}
 function updateSecretRows(){
   document.querySelectorAll('.chatlist-chat.op-secret-hidden').forEach(el=>el.classList.remove('op-secret-hidden'));
+  document.querySelectorAll('.chatlist-chat.op-secret-masked').forEach(el=>el.classList.remove('op-secret-masked'));
   if(!protectedPeerId||ownerPresent) return;
-  getProtectedRows().forEach(el=>el.classList.add('op-secret-hidden'));
+  getProtectedRows().forEach(el=>el.classList.add('op-secret-masked'));
 }
 function refreshProtection(){
   updateSecretRows();
@@ -119,7 +163,7 @@ unprotectBtn.onclick=()=>{
   protectedPeerId='';
   localStorage.removeItem(KEY_PROTECTED);
   ownerPresent=false;currentLocked=true;
-  document.querySelectorAll('.chatlist-chat.op-secret-hidden').forEach(x=>x.classList.remove('op-secret-hidden'));
+  document.querySelectorAll('.chatlist-chat.op-secret-hidden,.chatlist-chat.op-secret-masked').forEach(x=>{x.classList.remove('op-secret-hidden');x.classList.remove('op-secret-masked')});
   document.querySelectorAll('.chat.op-protected-lock').forEach(x=>x.classList.remove('op-protected-lock'));
   document.querySelectorAll('.op-chat-overlay').forEach(x=>x.remove());
   status.textContent='Chat himoyasi olib tashlandi';
@@ -135,6 +179,7 @@ const mo=new MutationObserver(()=>{
   requestAnimationFrame(()=>{
     remountQueued=false;
     mountOwnerUi();
+    ensureSettingsToggle();
     refreshProtection();
   });
 });
@@ -144,8 +189,16 @@ window.addEventListener('popstate',()=>{good=0;currentLocked=true;setTimeout(ref
 document.addEventListener('visibilitychange',()=>{if(document.hidden)applyLock('Telegram oynasi yashirildi')});
 window.addEventListener('blur',()=>applyLock('Oyna fokusdan chiqdi'));
 debug.textContent=VERSION+' · secure='+window.isSecureContext+' · peer='+(protectedPeerId||'none');
+document.addEventListener('click',(e)=>{
+  const row=e.target instanceof Element?e.target.closest('.op-secret-masked'):null;
+  if(row){
+    e.preventDefault();
+    e.stopImmediatePropagation();
+  }
+},true);
 owner=loadOwner(); loadModels(); setInterval(()=>{
   if(!document.documentElement.contains(fab)||!document.documentElement.contains(panel)) mountOwnerUi();
+  ensureSettingsToggle();
   refreshProtection();
 },1000);
 })();
