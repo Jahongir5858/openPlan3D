@@ -1,0 +1,1 @@
+Telegram Web K Owner Presence POC. Railway builds the official TelegramOrg/Telegram-web-k source, injects owner-presence.js, and serves the result over HTTPS. On phone: login, open a chat, tap the eye button, start camera, enroll owner, protect current chat.
