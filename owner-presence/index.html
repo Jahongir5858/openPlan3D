@@ -11,23 +11,23 @@
 <h2>👁 Owner Presence</h2>
 <p class="small">Android Chrome uchun HTTPS prototip. Endi yuz bilan birga <b>ko‘z ochiqligi va kameraga qarash holati</b> ham tekshiriladi. Yuz rasmi serverga yuborilmaydi.</p>
 <div class="card"><div class="camera"><video id="v1" playsinline muted></video><div class="badge" id="status">Model yuklanmoqda…</div></div>
-<div class="checks"><span id="cFace" class="pill">🙂 Yuz</span><span id="cEyes" class="pill">👁 Ko‘zlar</span><span id="cLook" class="pill">🎯 Qarash</span><span id="cLive" class="pill">⚡ Liveness</span></div>
+<div class="checks"><span id="cFace" class="pill">🙂 Yuz</span><span id="cEyes" class="pill">👁 Ko‘zlar</span><span id="cLook" class="pill">🎯 Qarash</span><span id="cLive" class="pill">👁 Attention</span></div>
 <div class="bar"><i id="prog"></i></div><p id="hint" class="small">Model tayyor bo‘lgach old kamerani yoqing.</p>
 <button id="cam" class="btn">Kamerani yoqish</button><button id="enroll" class="btn secondary" disabled>Yuzimni ro‘yxatdan o‘tkazish</button>
 <button id="enter" class="btn secondary" style="display:none">Maxfiy chatni sinash</button><button id="reset" class="btn danger" style="display:none">Yuz ma’lumotini o‘chirish</button>
 <div id="diag" class="diag"></div></div></section>
 <section id="chat" class="chat"><div class="head"><b>🔐 Maxfiy chat</b><span id="headState" class="small">Tekshirilmoqda</span><div class="mini"><video id="v2" playsinline muted></video></div></div>
-<div class="body"><div class="bubble">Chat ochilishi uchun aynan siz bo‘lishingiz kerak.</div><div class="bubble out">Ko‘zlar ochiq va yuz kameraga qaratilgan bo‘lishi kerak.</div><div class="bubble">Birinchi ochishda bir marta sekin ko‘zni yumib-ochish liveness sifatida tekshiriladi.</div></div>
+<div class="body"><div class="bubble">Chat ochilishi uchun aynan siz bo‘lishingiz kerak.</div><div class="bubble out">Ko‘zlar ochiq va yuz kameraga qaratilgan bo‘lishi kerak.</div><div class="bubble">Tabiiy pirpirashga ruxsat beriladi, lekin ko‘z uzoq yopilsa yoki yuz chetga burilsa chat yopiladi.</div></div>
 <div id="cover" class="cover"><div class="lock"><div class="icon">🔒</div><h2>Chat yopiq</h2><div id="reason">Egasining yuzi tasdiqlanmoqda…</div><div id="state" class="state">CHECKING</div><button id="back" class="btn secondary">Sozlamaga qaytish</button></div></div></section>
 </div><script>
 (()=>{'use strict';
 const MODEL='https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@0.22.2/weights';
 const KEY='ownerPresenceDescriptorV4';
-const TH=.50,LOOP=200,REQ=2,NOFACE=300,SAMPLES=7;
-const EYE_OPEN_MIN=.17,MAX_YAW=.38,MAX_TILT=.20,EYE_CLOSE_GRACE=700;
+const TH=.50,LOOP=160,REQ=2,NOFACE=300,SAMPLES=7;
+const EYE_OPEN_MIN=.16,MAX_YAW=.38,MAX_TILT=.20,EYE_CLOSE_GRACE=500;
 const $=x=>document.getElementById(x);
 let ready=false,stream=null,owner=null,running=false,inChat=false,ok=0,noFaceAt=0,eyesClosedAt=0;
-let livenessPassed=false,blinkOpenSeen=false,blinkClosedSeen=false;
+
 const status=$('status'),hint=$('hint'),diag=$('diag'),cam=$('cam'),enroll=$('enroll'),enter=$('enter'),reset=$('reset'),v1=$('v1'),v2=$('v2'),prog=$('prog'),cover=$('cover'),reason=$('reason'),state=$('state'),headState=$('headState');
 const cFace=$('cFace'),cEyes=$('cEyes'),cLook=$('cLook'),cLive=$('cLive');
 
@@ -48,7 +48,7 @@ function attention(face){
 function pill(el,ok){el.classList.toggle('ok',!!ok);el.classList.toggle('bad',ok===false)}
 function lock(s,r){cover.classList.remove('off');state.textContent=s;reason.textContent=r;headState.textContent=r;ok=0}
 function unlock(){cover.classList.add('off');state.textContent='OWNER + ATTENTION';headState.textContent='👁 Siz qarayapsiz'}
-function resetLiveness(){livenessPassed=false;blinkOpenSeen=false;blinkClosedSeen=false;cLive.textContent='⚡ Liveness';pill(cLive,null)}
+function setAttentionReady(){cLive.textContent='👁 Attention faol';pill(cLive,true)}
 function updateChecks(face,att,ownerOk){
   pill(cFace,ownerOk);pill(cEyes,att?.eyesOpen);pill(cLook,att?.frontal);
   cFace.textContent=ownerOk?'🙂 Owner':'🙂 Yuz';
@@ -72,13 +72,7 @@ async function reg(){
   if(ss.length<SAMPLES){hint.textContent='Ro‘yxatdan o‘tish tugamadi. Yaxshi yorug‘likda qayta urinib ko‘ring.';enroll.disabled=false;return}
   owner=avg(ss);localStorage.setItem(KEY,JSON.stringify(owner));status.textContent='Owner + ko‘z profili tayyor';hint.textContent='Tayyor. Maxfiy chatni sinang.';enter.style.display='block';reset.style.display='block';enroll.disabled=false
 }
-function processLiveness(att){
-  if(livenessPassed)return true;
-  if(att.eyesOpen&&!blinkOpenSeen){blinkOpenSeen=true;lock('LIVENESS','Endi bir marta sekin ko‘zingizni yumib oching');return false}
-  if(blinkOpenSeen&&!att.eyesOpen){blinkClosedSeen=true;lock('LIVENESS','Yaxshi. Ko‘zingizni yana oching');return false}
-  if(blinkClosedSeen&&att.eyesOpen){livenessPassed=true;cLive.textContent='⚡ Liveness OK';pill(cLive,true);return true}
-  return false
-}
+
 async function loop(){
   if(running)return;running=true;
   while(inChat){
@@ -97,13 +91,13 @@ async function loop(){
           noFaceAt=0;
           let d=distVec(owner,Array.from(f[0].descriptor)),ownerOk=d<=TH,att=attention(f[0]);updateChecks(f[0],att,ownerOk);
           if(!ownerOk){eyesClosedAt=0;lock('OTHER FACE','Boshqa yuz aniqlandi')}
-          else if(!att.frontal){eyesClosedAt=0;lock('NOT LOOKING','Kameraga qarang')}
-          else if(!livenessPassed){processLiveness(att)}
           else if(!att.eyesOpen){
             ok=0;if(!eyesClosedAt)eyesClosedAt=now;
             if(now-eyesClosedAt>EYE_CLOSE_GRACE)lock('EYES CLOSED','Ko‘zlaringizni ochib kameraga qarang')
+          }else if(!att.frontal){
+            eyesClosedAt=0;lock('NOT LOOKING','Telefon ekraniga qarang')
           }else{
-            eyesClosedAt=0;ok++;headState.textContent='Owner + qarash '+ok+'/'+REQ;if(ok>=REQ)unlock()
+            eyesClosedAt=0;setAttentionReady();ok++;headState.textContent='Owner + attention '+ok+'/'+REQ;if(ok>=REQ)unlock()
           }
         }
       }
@@ -113,7 +107,7 @@ async function loop(){
   running=false
 }
 cam.onclick=start;enroll.onclick=reg;
-enter.onclick=()=>{if(!stream||!owner)return;inChat=true;resetLiveness();eyesClosedAt=0;noFaceAt=0;$('setup').style.display='none';$('chat').style.display='block';lock('CHECKING','Yuz + ko‘z + qarash tekshirilmoqda…');loop()};
+enter.onclick=()=>{if(!stream||!owner)return;inChat=true;eyesClosedAt=0;noFaceAt=0;cLive.textContent='👁 Attention';pill(cLive,null);$('setup').style.display='none';$('chat').style.display='block';lock('CHECKING','Yuz + ko‘z + qarash tekshirilmoqda…');loop()};
 $('back').onclick=()=>{inChat=false;$('chat').style.display='none';$('setup').style.display='block'};
 reset.onclick=()=>{localStorage.removeItem(KEY);owner=null;enter.style.display='none';reset.style.display='none';prog.style.width='0';hint.textContent='Yuz ma’lumoti o‘chirildi.'};
 document.addEventListener('visibilitychange',()=>{if(inChat&&document.hidden)lock('HIDDEN','Tab yashirildi')});
