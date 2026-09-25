@@ -1,0 +1,1 @@
+import{Dn as e}from"./appDialogsManager-DdlDFdLp.js";export{e as editAndSetOwnAvatar};

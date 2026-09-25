@@ -1,0 +1,1 @@
+import{ua as e}from"./appDialogsManager-DdlDFdLp.js";export{e as createStoriesViewerWithPeer};
