@@ -685,6 +685,20 @@ list = mustReplace(
   'load global peer avatar through owner account'
 )
 
+list = mustReplace(
+  list,
+  `if (onSelectPeer && peer.username) {`,
+  `if (account && onSelectPeer && peer.username) {`,
+  'keep public-peer username resolution account-specific'
+)
+
+list = mustReplace(
+  list,
+  `key={\`peer-\${peer.id}\`}`,
+  `key={\`peer-\${peer.accountId}-\${peer.id}\`}`,
+  'make cross-account public peer keys unique'
+)
+
 write('src/components/ChatList.tsx', list)
 
 console.log('Unified Telegram patch applied successfully.')
