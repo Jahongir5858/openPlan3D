@@ -470,4 +470,221 @@ list = mustReplace(
 
 write('src/components/ChatList.tsx', list)
 
+
+// ---------------------------------------------------------------------------
+// Unified realtime correctness: active chat identity includes the account,
+// and edit/delete events only touch the owner account's message cache.
+// ---------------------------------------------------------------------------
+app = read('src/App.tsx')
+
+app = mustReplace(
+  app,
+  `const chatStoreKey = (accountId?: string | null, chatId?: string | null) =>
+    accountId && chatId ? \`\${accountId}:\${chatId}\` : ''`,
+  `const chatStoreKey = (accountId?: string | null, chatId?: string | null) =>
+    accountId && chatId ? \`\${accountId}:\${chatId}\` : ''
+
+  const activeAccountIdRef = useRef<string | null>(null)
+  const activeChatIdRef = useRef<string | null>(null)
+  useEffect(() => {
+    activeAccountIdRef.current = activeAccountId
+  }, [activeAccountId])
+  useEffect(() => {
+    activeChatIdRef.current = activeChatId
+  }, [activeChatId])`,
+  'add active account/chat refs'
+)
+
+app = mustReplace(
+  app,
+  `unreadCount: chatId !== activeChatId && !message?.isOutgoing ? 1 : 0,`,
+  `unreadCount:
+                !(chatId === activeChatIdRef.current && accountId === activeAccountIdRef.current) &&
+                !message?.isOutgoing
+                  ? 1
+                  : 0,`,
+  'make new-dialog unread account-aware'
+)
+
+app = mustReplace(
+  app,
+  `const shouldIncrement = chatId !== activeChatId && !message?.isOutgoing`,
+  `const isActiveTarget =
+              chatId === activeChatIdRef.current && accountId === activeAccountIdRef.current
+            const shouldIncrement = !isActiveTarget && !message?.isOutgoing`,
+  'make realtime unread increment account-aware'
+)
+
+app = mustReplace(
+  app,
+  `(isOutgoing || chatId === activeChatId ? 0 : d.unreadCount),`,
+  `(isOutgoing || isActiveTarget ? 0 : d.unreadCount),`,
+  'preserve unread from same chat id in another account'
+)
+
+app = mustReplace(
+  app,
+  `const { chatId, messageIds, isDeletedLocally, deletedAt } = payload`,
+  `const { accountId, chatId, messageIds, isDeletedLocally, deletedAt } = payload`,
+  'carry account id into delete event'
+)
+
+app = mustReplace(
+  app,
+  `const { chatId, message } = payload`,
+  `const { accountId, chatId, message } = payload`,
+  'carry account id into edit event'
+)
+
+app = mustReplaceAll(
+  app,
+  `const targetChatIds = chatId && prev[chatId] ? [chatId] : Object.keys(prev)`,
+  `const targetKey = chatStoreKey(accountId, chatId)
+            const targetChatIds = targetKey && prev[targetKey] ? [targetKey] : []`,
+  'scope edit/delete cache events to owner account',
+  2
+)
+
+write('src/App.tsx', app)
+
+// ---------------------------------------------------------------------------
+// Cross-account MTProto search. In unified mode search every account in
+// parallel, keep account identity on each result, then de-duplicate safely.
+// ---------------------------------------------------------------------------
+list = read('src/components/ChatList.tsx')
+
+list = mustReplace(
+  list,
+  `// Debounced Telegram MTProto Global Search
+  const searchTimeoutRef = useRef<any>(null)
+  useEffect(() => {
+    if (!searchQuery.trim() || !account?.id) {
+      setGlobalPeers([])
+      setGlobalMessages([])
+      setIsSearchingGlobal(false)
+      return
+    }
+
+    if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current)
+
+    setIsSearchingGlobal(true)
+    searchTimeoutRef.current = setTimeout(async () => {
+      try {
+        const query = searchQuery.trim()
+        const [peersRes, msgsRes] = await Promise.all([
+          window.guidegram?.searchPublicPeers?.(account.id, query),
+          window.guidegram?.searchGlobal?.(
+            account.id,
+            query,
+            searchFilter === 'all' ? undefined : searchFilter
+          ),
+        ])
+
+        // Filter out peers already in local dialogs
+        const existingIds = new Set(dialogs.map((d) => d.id))
+        const uniquePeers = (peersRes || []).filter((p) => !existingIds.has(p.id))
+
+        setGlobalPeers(uniquePeers)
+        setGlobalMessages(msgsRes || [])
+      } catch (err) {
+        console.warn('Global search error:', err)
+      } finally {
+        setIsSearchingGlobal(false)
+      }
+    }, 350)
+
+    return () => {
+      if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current)
+    }
+  }, [searchQuery, searchFilter, account?.id, dialogs])`,
+  `// Debounced Telegram MTProto Global Search.
+  // account === null means Unified Workspace, so query every loaded account.
+  const searchTimeoutRef = useRef<any>(null)
+  useEffect(() => {
+    const accountIds = account?.id
+      ? [account.id]
+      : Array.from(new Set(dialogs.map((d) => d.accountId).filter(Boolean)))
+
+    if (!searchQuery.trim() || accountIds.length === 0) {
+      setGlobalPeers([])
+      setGlobalMessages([])
+      setIsSearchingGlobal(false)
+      return
+    }
+
+    if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current)
+
+    setIsSearchingGlobal(true)
+    searchTimeoutRef.current = setTimeout(async () => {
+      try {
+        const query = searchQuery.trim()
+        const perAccount = await Promise.all(
+          accountIds.map(async (accountId) => {
+            const [peersRes, msgsRes] = await Promise.all([
+              window.guidegram?.searchPublicPeers?.(accountId, query),
+              window.guidegram?.searchGlobal?.(
+                accountId,
+                query,
+                searchFilter === 'all' ? undefined : searchFilter
+              ),
+            ])
+            return {
+              accountId,
+              peers: (peersRes || []).map((p) => ({ ...p, accountId: p.accountId || accountId })),
+              messages: (msgsRes || []).map((m) => ({ ...m, accountId: m.accountId || accountId })),
+            }
+          })
+        )
+
+        const existingKeys = new Set(dialogs.map((d) => \`\${d.accountId}:\${d.id}\`))
+        const peerMap = new Map<string, DialogItem>()
+        for (const result of perAccount) {
+          for (const peer of result.peers) {
+            const key = \`\${peer.accountId}:\${peer.id}\`
+            if (!existingKeys.has(key) && !peerMap.has(key)) peerMap.set(key, peer)
+          }
+        }
+
+        const messageMap = new Map<string, MessageItem>()
+        for (const result of perAccount) {
+          for (const message of result.messages) {
+            const key = \`\${message.accountId}:\${message.chatId}:\${message.id}\`
+            if (!messageMap.has(key)) messageMap.set(key, message)
+          }
+        }
+
+        setGlobalPeers(Array.from(peerMap.values()))
+        setGlobalMessages(
+          Array.from(messageMap.values()).sort((a, b) => (b.date || 0) - (a.date || 0))
+        )
+      } catch (err) {
+        console.warn('Global search error:', err)
+      } finally {
+        setIsSearchingGlobal(false)
+      }
+    }, 350)
+
+    return () => {
+      if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current)
+    }
+  }, [searchQuery, searchFilter, account?.id, dialogs])`,
+  'search all accounts in unified mode'
+)
+
+list = mustReplace(
+  list,
+  `onSelectChat(peer.id)`,
+  `onSelectChat(peer.id, peer.accountId)`,
+  'route global peer result through owner account'
+)
+
+list = mustReplace(
+  list,
+  `accountId={account?.id || ''}`,
+  `accountId={peer.accountId || account?.id || ''}`,
+  'load global peer avatar through owner account'
+)
+
+write('src/components/ChatList.tsx', list)
+
 console.log('Unified Telegram patch applied successfully.')
