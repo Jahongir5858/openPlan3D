@@ -1,0 +1,69 @@
+name: Build Unified Telegram Client
+
+on:
+  push:
+    branches:
+      - unified-telegram-client
+    paths:
+      - "unified-telegram/**"
+      - ".github/workflows/build-unified-telegram.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout build overlay
+        uses: actions/checkout@v4
+        with:
+          path: overlay
+
+      - name: Checkout pinned Guidegram base
+        uses: actions/checkout@v4
+        with:
+          repository: guidegram/guidegram
+          ref: 155b7c5dc2e77c219972ff01ffeb4ce15ae2d2e9
+          path: guidegram
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.7.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: guidegram/pnpm-lock.yaml
+
+      - name: Apply unified multi-account patch
+        run: node overlay/unified-telegram/apply-unified.mjs guidegram
+
+      - name: Install dependencies
+        working-directory: guidegram
+        run: pnpm install --frozen-lockfile
+
+      - name: TypeScript and web build
+        working-directory: guidegram
+        run: pnpm build
+
+      - name: Build Windows installer and portable directory
+        working-directory: guidegram
+        run: pnpm build:dist
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+
+      - name: Upload Windows build
+        uses: actions/upload-artifact@v4
+        with:
+          name: Unified-Telegram-Windows-x64
+          path: |
+            guidegram/release/*.exe
+            guidegram/release/win-unpacked/**
+          if-no-files-found: error
+          retention-days: 30
