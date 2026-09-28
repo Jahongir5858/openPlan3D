@@ -4,7 +4,7 @@ import path from 'node:path'
 const root = path.resolve(process.argv[2] || process.cwd())
 
 function read(rel) {
-  return fs.readFileSync(path.join(root, rel), 'utf8')
+  return fs.readFileSync(path.join(root, rel), 'utf8').replace(/\r\n/g, '\n')
 }
 function write(rel, value) {
   fs.writeFileSync(path.join(root, rel), value, 'utf8')
