@@ -44,6 +44,9 @@ jobs:
       - name: Apply unified multi-account patch
         run: node overlay/unified-telegram/apply-unified.mjs guidegram
 
+      - name: Apply Telegram Desktop style UI patch
+        run: node overlay/unified-telegram/apply-telegram-ui.mjs guidegram
+
       - name: Install dependencies
         working-directory: guidegram
         run: pnpm install --frozen-lockfile
